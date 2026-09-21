@@ -1,0 +1,40 @@
+include README.md
+include LICENSE
+include requirements.txt
+
+# Workflows
+recursive-include workflows *.yaml
+
+# Personas
+recursive-include personas *.md
+
+# Frontend
+recursive-include frontend *.html
+recursive-include frontend/css *.css
+recursive-include frontend/js *.js
+
+# Upstream (real source code from NemoClaw, MiMo, Hermes, AIoX)
+recursive-include upstream *.py
+recursive-include upstream *.ts
+recursive-include upstream *.js
+recursive-include upstream *.yaml
+recursive-include upstream *.yml
+recursive-include upstream *.json
+recursive-include upstream *.md
+recursive-include upstream *.sh
+recursive-include upstream *.txt
+
+# Bridge plugin (production deployment)
+recursive-include bridge-plugin *.diff
+recursive-include bridge-plugin *.ts
+recursive-include bridge-plugin *.json
+
+# Tests
+recursive-include tests *.py
+
+# Docs
+recursive-include docs *.md
+recursive-include docs *.yaml
+
+# Screenshots
+include screenshot-*.png

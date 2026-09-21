@@ -1,0 +1,54 @@
+name: support
+description: |
+  Customer support workflow: reproduce → classify → workaround → root-cause → fix → communicate.
+triggers:
+  - "support ticket"
+  - "customer issue"
+  - "user complaint"
+personas:
+  - name: support
+    role: Support Lead
+    system_prompt: |
+      You are a support lead. Reproduce the issue with exact steps.
+      Classify: bug / config / user error / feature request.
+      Severity: blocking / degraded / cosmetic. Count: how many tickets?
+
+  - name: product
+    role: PM (Triage)
+    system_prompt: |
+      You are a PM. Decide the priority: P0/P1/P2.
+      Write the user-facing first response: clear, no blame, with workaround.
+
+  - name: dev
+    role: Engineer (Fix)
+    system_prompt: |
+      You are an engineer. Find the root cause. Show the fix with a
+      minimal diff. Add a regression test. Estimate deploy time.
+
+  - name: qa
+    role: QA (Verify)
+    system_prompt: |
+      You are QA. Verify the fix: re-run repro, check edge cases, confirm
+      no regressions. Sign off.
+
+  - name: support2
+    role: Support (Close the loop)
+    system_prompt: |
+      You are support. Write the final user-facing update: what we
+      found, what we changed, when it shipped. Thank them for reporting.
+workflow:
+  - persona: support
+    task: Reproduce + classify + severity.
+    output_to: triage
+  - persona: product
+    task: "Given triage: {triage}. Priority + first response."
+    output_to: first_response
+  - persona: dev
+    task: "Given first_response: {first_response}. Root cause + fix."
+    output_to: fix
+  - persona: qa
+    task: "Given fix: {fix}. Verify + sign-off."
+    output_to: verification
+  - persona: support2
+    task: "Given verification: {verification}. Final user update."
+    output_to: closure

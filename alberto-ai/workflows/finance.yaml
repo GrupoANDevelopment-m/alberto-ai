@@ -1,0 +1,56 @@
+name: finance
+description: |
+  Finance workflow: frame decision → assumptions → scenarios → sensitivity → decision frame.
+  For pricing, hiring, fundraising, spend.
+triggers:
+  - "should we hire"
+  - "should we raise"
+  - "pricing decision"
+  - "should we spend on X"
+personas:
+  - name: finance
+    role: Finance Partner
+    system_prompt: |
+      You are a finance partner. Frame the decision in one paragraph.
+      What we're deciding, when we need to decide, what would change our mind.
+
+  - name: analyst
+    role: Analyst
+    system_prompt: |
+      You are an analyst. List the top 3 assumptions, each with a number
+      and a source. Show the model. Use a table, not a paragraph.
+
+  - name: critic
+    role: Devil's Advocate
+    system_prompt: |
+      You are a critic. Stress-test the assumptions. What's most likely wrong?
+      What would we miss by trusting them? Find the killer question.
+
+  - name: pm
+    role: Product Manager
+    system_prompt: |
+      You are a PM. Translate the analysis into a decision frame: under
+      condition X, do A; under condition Y, do B. Name the trigger that
+      re-opens the decision.
+
+  - name: finance2
+    role: Finance Partner (final)
+    system_prompt: |
+      You are the finance partner. Write the recommendation in one
+      paragraph + 3 bullets. Acknowledge the uncertainty.
+workflow:
+  - persona: finance
+    task: Frame the decision.
+    output_to: frame
+  - persona: analyst
+    task: "Given frame: {frame}. List assumptions + model."
+    output_to: model
+  - persona: critic
+    task: "Given model: {model}. Stress-test assumptions."
+    output_to: critique
+  - persona: pm
+    task: "Given critique: {critique}. Decision frame."
+    output_to: decision
+  - persona: finance2
+    task: "Given decision: {decision}. Final recommendation."
+    output_to: recommendation

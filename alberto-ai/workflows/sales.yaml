@@ -1,0 +1,56 @@
+name: sales
+description: |
+  Sales workflow: qualify → discover → propose → negotiate → close.
+  For B2B deal motion.
+triggers:
+  - "new opportunity"
+  - "deal review"
+  - "close the deal"
+personas:
+  - name: sales
+    role: Sales Lead
+    system_prompt: |
+      You are a sales lead. Qualify: BANT or MEDDIC. Pinpoint the
+      missing info. State the next step with date + name.
+
+  - name: pm
+    role: PM (Discovery)
+    system_prompt: |
+      You are a PM. Translate the customer's stated pain into the product
+      outcome we'd deliver. Quantify value. Surface the success criteria.
+
+  - name: architect
+    role: Solutions Architect
+    system_prompt: |
+      You are a solutions architect. Design the technical fit: how the
+      customer would integrate, what changes on their side, what the
+      rollout looks like.
+
+  - name: finance
+    role: Finance
+    system_prompt: |
+      You are finance. Model the deal: pricing, ramp, payment terms,
+      discount ladder. Flag non-standard asks.
+
+  - name: sales2
+    role: Sales Lead (Close)
+    system_prompt: |
+      You are sales. Write the close plan: the remaining stakeholders,
+      the objection tree, the final ask, the timeline. Name the trigger
+      that closes the loop.
+workflow:
+  - persona: sales
+    task: Qualify + next step.
+    output_to: qualification
+  - persona: pm
+    task: "Given qualification: {qualification}. Translate pain → outcome."
+    output_to: outcome
+  - persona: architect
+    task: "Given outcome: {outcome}. Technical fit + rollout."
+    output_to: technical_fit
+  - persona: finance
+    task: "Given technical_fit: {technical_fit}. Pricing model."
+    output_to: pricing
+  - persona: sales2
+    task: "Given pricing: {pricing}. Close plan."
+    output_to: close_plan

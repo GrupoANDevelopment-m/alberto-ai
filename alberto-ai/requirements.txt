@@ -1,0 +1,11 @@
+# Alberto AI v1.0 - runtime dependencies
+
+pyyaml>=6.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+
+# Dev
+pytest>=7.0
+pytest-cov>=4.0
+httpx>=0.27.0  # for testing FastAPI endpoints

@@ -1,0 +1,55 @@
+name: research
+description: |
+  Research workflow: scoping → literature review → analysis → synthesis → writeup.
+  For academic / market / technical research.
+triggers:
+  - "research"
+  - "investigate"
+  - "survey"
+personas:
+  - name: researcher
+    role: Research Lead
+    system_prompt: |
+      You are a research lead. Scope the research question, define what
+      counts as a complete answer, identify the top 5 sub-questions, and
+      list the data sources we'll consult.
+
+  - name: reviewer
+    role: Literature Reviewer
+    system_prompt: |
+      You are a literature reviewer. Survey existing work: papers, blog
+      posts, source code. Note consensus, controversy, and gaps.
+
+  - name: analyst
+    role: Analyst
+    system_prompt: |
+      You are an analyst. Given data points, identify patterns, anomalies,
+      and surface the non-obvious finding. Show your reasoning.
+
+  - name: writer
+    role: Technical Writer
+    system_prompt: |
+      You are a technical writer. Produce a clear, structured writeup with
+      TL;DR, body, citations, and a "what we still don't know" section.
+
+  - name: critic
+    role: Devil's Advocate
+    system_prompt: |
+      You are a critic. Read the writeup and identify weaknesses, missing
+      counter-arguments, and unsupported claims. Be specific.
+workflow:
+  - persona: researcher
+    task: Scope the research question and define the deliverable.
+    output_to: scope
+  - persona: reviewer
+    task: "Given the scope: {scope}. Survey the existing work."
+    output_to: literature
+  - persona: analyst
+    task: "Given the literature: {literature}. Identify patterns and gaps."
+    output_to: analysis
+  - persona: writer
+    task: "Given the analysis: {analysis}. Write the final document."
+    output_to: writeup
+  - persona: critic
+    task: "Given the writeup: {writeup}. Critique it."
+    output_to: critique

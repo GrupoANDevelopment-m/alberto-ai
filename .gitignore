@@ -1,0 +1,26 @@
+# Build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual envs
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Big files (carregado via release)
+upstream/hermes/agent_data/data/
+upstream/mimo/nemoclaw/sandbox/
+*.log
+
+# Node
+node_modules/

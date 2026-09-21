@@ -1,0 +1,451 @@
+#!/usr/bin/env node
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { pathToFileURL } from "node:url";
+
+import { upsertStickyComment } from "../advisors/github.mts";
+import { parseArgs, readIfExists, readJsonIfExists } from "../advisors/io.mts";
+
+const MARKER = "<!-- nemoclaw-pr-review-advisor -->";
+
+type ReviewAdvisorResult = {
+  headSha?: string;
+  summary?: {
+    recommendation?: string;
+    confidence?: string;
+    oneLine?: string;
+    topItem?: string;
+    sinceLastReview?: {
+      resolved?: number;
+      stillApplies?: number;
+      newItems?: number;
+    };
+  };
+  findings?: Array<{
+    severity?: string;
+    category?: string;
+    title?: string;
+    file?: string | null;
+    line?: number | null;
+    description?: string;
+    impact?: string;
+    recommendation?: string;
+    verificationHint?: string;
+    missingRegressionTest?: string;
+    evidence?: string;
+    simplification?: {
+      tag?: string;
+      cut?: string;
+      replacement?: string;
+      estimatedNetLines?: number | null;
+      safetyBoundary?: string;
+    };
+  }>;
+  acceptanceCoverage?: Array<{
+    clause?: string;
+    status?: string;
+    evidence?: string;
+  }>;
+  sourceOfTruthReview?: Array<{
+    surface?: string;
+    status?: string;
+    regressionTest?: string;
+    evidence?: string;
+  }>;
+  testDepth?: {
+    verdict?: string;
+    rationale?: string;
+    suggestedTests?: string[];
+  };
+  reviewCompleteness?: {
+    limitations?: string[];
+  };
+};
+
+type CommentMetadata = {
+  runId?: string;
+  runAttempt?: string;
+  commentId?: string;
+};
+
+type TestingFollowup = {
+  label: string;
+  text: string;
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const repo = args.repo || process.env.GITHUB_REPOSITORY;
+  const pr = args.pr || process.env.PR_NUMBER;
+  const summaryPath = args.summary || "artifacts/pr-review-advisor/pr-review-advisor-summary.md";
+  const resultPath =
+    args.result || "artifacts/pr-review-advisor/pr-review-advisor-final-result.json";
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  const runUrl =
+    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+      ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : undefined;
+
+  if (!repo || !pr) {
+    console.log("Skipping PR review advisor comment: repo or PR number not provided");
+    return;
+  }
+  if (!token) {
+    console.log("Skipping PR review advisor comment: GITHUB_TOKEN/GH_TOKEN not provided");
+    return;
+  }
+
+  const summary =
+    readIfExists(summaryPath) ||
+    readIfExists("artifacts/pr-review-advisor/pr-review-advisor-summary.md");
+  if (!summary) throw new Error(`No PR review advisor summary found at ${summaryPath}`);
+  const result = readJsonIfExists<ReviewAdvisorResult>(resultPath);
+  const baseMetadata = {
+    runId: process.env.GITHUB_RUN_ID,
+    runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+  };
+  const body = buildComment({
+    summary,
+    result,
+    runUrl,
+    marker: MARKER,
+    metadata: baseMetadata,
+  });
+
+  await upsertStickyComment({
+    repo,
+    pr,
+    token,
+    marker: MARKER,
+    body,
+    label: "PR review advisor",
+    bodyForComment: (comment) =>
+      buildComment({
+        summary,
+        result,
+        runUrl,
+        marker: MARKER,
+        metadata: { ...baseMetadata, commentId: String(comment.id) },
+      }),
+  });
+}
+
+export function buildComment({
+  summary: _summary,
+  result,
+  runUrl,
+  marker,
+  metadata,
+}: {
+  summary: string;
+  result?: ReviewAdvisorResult;
+  runUrl?: string;
+  marker?: string;
+  metadata?: CommentMetadata;
+}): string {
+  const blockerCount =
+    result?.findings?.filter((finding) => finding.severity === "blocker").length ?? 0;
+  const warningCount =
+    result?.findings?.filter((finding) => finding.severity === "warning").length ?? 0;
+  const suggestionCount =
+    result?.findings?.filter((finding) => finding.severity === "suggestion").length ?? 0;
+  const secondary = buildSecondarySummary(result);
+  const findingsDetails = renderFindingsDetails(result);
+  const simplificationDetails = renderSimplificationDetails(result);
+  const testingFollowupsDetails = renderTestingFollowupsDetails(result);
+  const previousReviewDetails = renderPreviousReviewDetails(result);
+  const details = runUrl ? `\n[Workflow run details](${runUrl})` : "";
+  const hiddenMetadata = renderHiddenMetadata(result, metadata);
+  const posture = reviewPosture(result?.summary?.recommendation);
+  return `${marker || MARKER}
+${hiddenMetadata}## PR Review Advisor
+
+**Review posture:** ${posture}
+**Action expectation:** Address required items before merge. Resolve or explicitly justify warnings. Treat suggestions as current-PR improvements when they touch changed code; defer only with maintainer rationale or a linked follow-up.
+**Findings:** ${countLabel(blockerCount, "required fix", "required fixes")}, ${countLabel(warningCount, "item to resolve/justify", "items to resolve/justify")}, ${countLabel(suggestionCount, "in-scope improvement", "in-scope improvements")}
+${secondary}${findingsDetails}${simplificationDetails}${testingFollowupsDetails}${previousReviewDetails}${details}
+
+This is an automated, non-binding review; it still expects maintainers and agents to respond to each finding. A human maintainer must make the final merge decision.
+
+`;
+}
+
+function renderHiddenMetadata(result?: ReviewAdvisorResult, metadata?: CommentMetadata): string {
+  const fields = [
+    result?.headSha ? `head_sha: ${safeMetadataValue(result.headSha)}` : undefined,
+    result?.summary?.recommendation
+      ? `recommendation: ${safeMetadataValue(result.summary.recommendation)}`
+      : undefined,
+    metadata?.runId ? `run_id: ${safeMetadataValue(metadata.runId)}` : undefined,
+    metadata?.runAttempt ? `run_attempt: ${safeMetadataValue(metadata.runAttempt)}` : undefined,
+    metadata?.commentId ? `comment_id: ${safeMetadataValue(metadata.commentId)}` : undefined,
+  ].filter((field): field is string => Boolean(field));
+  return fields.length > 0 ? `<!-- ${fields.join("; ")} -->\n` : "";
+}
+
+function safeMetadataValue(value: string): string {
+  return value
+    .replace(/[;\n\r<>]/g, "")
+    .trim()
+    .slice(0, 120);
+}
+
+function reviewPosture(recommendation?: string): string {
+  if (recommendation === "merge_as_is") return "No blocking advisor findings";
+  if (recommendation === "merge_after_fixes") return "Resolve findings before merge";
+  if (recommendation === "needs_rework" || recommendation === "blocked") {
+    return "Do not merge until addressed";
+  }
+  if (recommendation === "superseded") return "Superseded by other work";
+  if (recommendation === "info_only") return "Informational / low confidence";
+  return "Review findings and decide before merge";
+}
+
+function buildSecondarySummary(result?: ReviewAdvisorResult): string {
+  const sinceLastReview = result?.summary?.sinceLastReview;
+  if (sinceLastReview) {
+    return `**Since last review:** ${countLabel(sinceLastReview.resolved, "prior item")} resolved, ${countLabel(sinceLastReview.stillApplies, "still applies", "still apply")}, ${countLabel(sinceLastReview.newItems, "new item")} found\n`;
+  }
+  const topItem = result?.summary?.topItem || topFindingTitle(result);
+  return topItem ? `**Top item:** ${escapeCommentText(topItem)}\n` : "";
+}
+
+function topFindingTitle(result?: ReviewAdvisorResult): string | undefined {
+  return (
+    result?.findings?.find((finding) => finding.severity === "blocker")?.title ||
+    result?.findings?.find((finding) => finding.severity === "warning")?.title ||
+    result?.findings?.find((finding) => finding.severity === "suggestion")?.title
+  );
+}
+
+function renderFindingsDetails(result?: ReviewAdvisorResult): string {
+  if (!result?.findings?.length) return "";
+  const blockerFindings = result.findings.filter((finding) => finding.severity === "blocker");
+  const warningFindings = result.findings.filter((finding) => finding.severity === "warning");
+  const suggestionFindings = result.findings.filter((finding) => finding.severity === "suggestion");
+  const sections = [
+    {
+      summary: "🚨 Required before merge",
+      guidance:
+        "Address these before merging unless a maintainer explicitly overrides the advisor with rationale.",
+      findings: blockerFindings,
+    },
+    {
+      summary: "⚠️ Resolve or justify before merge",
+      guidance:
+        "Investigate these in the current review; either fix them, explain why they are not applicable, or document the accepted risk.",
+      findings: warningFindings,
+    },
+    {
+      summary: "💡 In-scope improvements",
+      guidance:
+        "These are lower-risk, not throwaway. Prefer fixing them in this PR when they are local to changed code; defer only with rationale or a linked follow-up.",
+      findings: suggestionFindings,
+    },
+  ];
+  const lines: string[] = [
+    "",
+    "<details>",
+    `<summary>Review findings by urgency: ${countLabel(blockerFindings.length, "required fix", "required fixes")}, ${countLabel(warningFindings.length, "item to resolve/justify", "items to resolve/justify")}, ${countLabel(suggestionFindings.length, "in-scope improvement", "in-scope improvements")}</summary>`,
+    "",
+  ];
+
+  for (const section of sections) {
+    lines.push(`### ${section.summary}`);
+    lines.push(`_${section.guidance}_`);
+    if (section.findings.length === 0) {
+      lines.push("- _None._");
+    } else {
+      for (const finding of section.findings.slice(0, 20)) {
+        lines.push(formatFinding(finding));
+      }
+    }
+    lines.push("");
+  }
+  lines.push("</details>", "");
+  return `${lines.join("\n")}\n`;
+}
+
+function renderSimplificationDetails(result?: ReviewAdvisorResult): string {
+  const findings = result?.findings?.filter((finding) => finding.simplification) || [];
+  if (findings.length === 0) return "";
+  const netLines = findings.reduce((total, finding) => {
+    const value = finding.simplification?.estimatedNetLines;
+    return typeof value === "number" && Number.isFinite(value) ? total + value : total;
+  }, 0);
+  const netLabel = netLines < 0 ? `, net ${netLines} lines possible` : "";
+  const lines: string[] = [
+    "",
+    "<details>",
+    `<summary>Simplification opportunities: ${countLabel(findings.length, "possible cut", "possible cuts")}${netLabel}</summary>`,
+    "",
+    "_These are safe simplification checks only. Do not remove validation, security controls, data-loss prevention, or required tests._",
+  ];
+  for (const finding of findings.slice(0, 12)) {
+    const item = finding.simplification;
+    if (!item) continue;
+    const location = formatFindingLocation(finding);
+    lines.push(
+      `- **${escapeCommentText(item.tag || "shrink")}**${location}: ${escapeCommentText(item.cut || finding.title || "Review simplification")}`,
+    );
+    lines.push(
+      `  - Replacement: ${escapeCommentText(item.replacement || "Use the simpler existing path.")}`,
+    );
+    if (typeof item.estimatedNetLines === "number") {
+      lines.push(`  - Net: ${item.estimatedNetLines} lines`);
+    }
+    lines.push(
+      `  - Safety boundary: ${escapeCommentText(item.safetyBoundary || "Keep validation, security, data-loss prevention, and required tests.")}`,
+    );
+  }
+  lines.push("", "</details>", "");
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTestingFollowupsDetails(result?: ReviewAdvisorResult): string {
+  const followups = collectTestingFollowups(result);
+  if (followups.length === 0) return "";
+  const lines: string[] = [
+    "",
+    "<details>",
+    "<summary>Test follow-ups to resolve or justify</summary>",
+    "",
+    "_If these cover changed behavior, prefer adding them in this PR; otherwise state why existing coverage is enough or link the follow-up._",
+  ];
+  for (const followup of followups) lines.push(formatTestingFollowup(followup));
+  lines.push("", "</details>", "");
+  return `${lines.join("\n")}\n`;
+}
+
+function collectTestingFollowups(result?: ReviewAdvisorResult): TestingFollowup[] {
+  const followups: TestingFollowup[] = [];
+  if (!result) return followups;
+  if (result.testDepth?.verdict && result.testDepth.verdict !== "unit_sufficient") {
+    const label = testDepthLabel(result.testDepth.verdict);
+    const rationale = result.testDepth.rationale ? ` ${result.testDepth.rationale}` : "";
+    for (const suggestion of result.testDepth.suggestedTests?.slice(0, 5) || []) {
+      followups.push({ label, text: `${suggestion}.${rationale}` });
+    }
+  }
+  for (const finding of result.findings?.filter((item) => item.category === "tests").slice(0, 5) ||
+    []) {
+    followups.push({
+      label: finding.title || "Test coverage",
+      text:
+        finding.recommendation ||
+        finding.description ||
+        "Add targeted coverage for the changed behavior.",
+    });
+  }
+  for (const clause of result.acceptanceCoverage
+    ?.filter((item) => item.status && item.status !== "met")
+    .slice(0, 5) || []) {
+    followups.push({
+      label: "Acceptance clause",
+      text: `${clause.clause || "unspecified"} — add test evidence or identify existing coverage. ${clause.evidence || ""}`.trim(),
+    });
+  }
+  for (const review of result.sourceOfTruthReview
+    ?.filter((item) => item.status === "missing" || item.status === "needs_followup")
+    .slice(0, 5) || []) {
+    followups.push({
+      label: review.surface || "Localized behavior",
+      text: `${review.regressionTest || "add a regression test for the localized behavior"}. ${review.evidence || ""}`.trim(),
+    });
+  }
+  return uniqueTestingFollowups(followups).slice(0, 8);
+}
+
+function formatTestingFollowup(followup: TestingFollowup): string {
+  return `- **${escapeCommentText(followup.label)}** — ${escapeCommentText(followup.text)}`;
+}
+
+function uniqueTestingFollowups(followups: TestingFollowup[]): TestingFollowup[] {
+  const seen = new Set<string>();
+  const unique: TestingFollowup[] = [];
+  for (const followup of followups) {
+    const key = `${followup.label}\u0000${followup.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(followup);
+  }
+  return unique;
+}
+
+function testDepthLabel(verdict: string): string {
+  if (verdict === "runtime_validation_recommended") return "Runtime validation";
+  if (verdict === "mocks_recommended") return "Mocked behavioral coverage";
+  return "Test coverage";
+}
+
+function renderPreviousReviewDetails(result?: ReviewAdvisorResult): string {
+  const sinceLastReview = result?.summary?.sinceLastReview;
+  if (!sinceLastReview || !result?.findings?.length) return "";
+  const lines: string[] = ["<details>", "<summary>Since last review details</summary>", ""];
+  lines.push("Current findings, using the urgency labels above:");
+  for (const finding of result.findings.slice(0, 20)) lines.push(formatFinding(finding));
+  lines.push("", "</details>", "");
+  return `${lines.join("\n")}\n`;
+}
+
+function formatFinding(finding: NonNullable<ReviewAdvisorResult["findings"]>[number]): string {
+  const title = escapeCommentText(finding.title || "Review finding");
+  const location = formatFindingLocation(finding);
+  const description = finding.description ? `: ${escapeCommentText(finding.description)}` : "";
+  const lines = [`- **${title}**${location}${description}`];
+  if (finding.impact) lines.push(`  - Impact: ${escapeCommentText(finding.impact)}`);
+  if (finding.recommendation) {
+    lines.push(`  - Recommendation: ${escapeCommentText(finding.recommendation)}`);
+  }
+  const expectedFollowUp = findingExpectedFollowUp(finding.severity);
+  if (expectedFollowUp) lines.push(`  - Expected follow-up: ${expectedFollowUp}`);
+  if (finding.verificationHint) {
+    lines.push(`  - Verification hint: ${escapeCommentText(finding.verificationHint)}`);
+  }
+  if (finding.missingRegressionTest) {
+    lines.push(`  - Missing regression test: ${escapeCommentText(finding.missingRegressionTest)}`);
+  }
+  if (finding.evidence) lines.push(`  - Evidence: ${escapeCommentText(finding.evidence)}`);
+  return lines.join("\n");
+}
+
+function findingExpectedFollowUp(severity?: string): string {
+  if (severity === "blocker") return "Fix before merge or get explicit maintainer override.";
+  if (severity === "warning") return "Resolve in this PR or explain why the risk is acceptable.";
+  if (severity === "suggestion") {
+    return "Prefer a current-PR fix when local to changed code; defer only with rationale or linked follow-up.";
+  }
+  return "Review and decide whether this PR should act on it.";
+}
+
+function formatFindingLocation(
+  finding: NonNullable<ReviewAdvisorResult["findings"]>[number],
+): string {
+  if (!finding.file) return "";
+  const line = Number.isInteger(finding.line) && Number(finding.line) > 0 ? `:${finding.line}` : "";
+  return ` (${escapeCommentText(finding.file)}${line})`;
+}
+
+function escapeCommentText(value: string): string {
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([\\`*_\[\]()!|])/g, "\\$1")
+    .replaceAll("@", "&#64;");
+}
+
+function countLabel(count: unknown, singular: string, plural = `${singular}s`): string {
+  const numeric = typeof count === "number" && Number.isFinite(count) ? count : 0;
+  return `${numeric} ${numeric === 1 ? singular : plural}`;
+}

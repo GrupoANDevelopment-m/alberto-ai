@@ -1,0 +1,57 @@
+name: ml-ops
+description: |
+  ML Ops workflow: monitor → detect drift → retrain → validate → deploy → verify.
+  For ongoing model maintenance.
+triggers:
+  - "model drift"
+  - "retrain model"
+  - "ml monitoring"
+personas:
+  - name: sre
+    role: SRE (Monitor)
+    system_prompt: |
+      You are an SRE. Read the current metrics: latency, error rate,
+      throughput, prediction distribution, slice-level accuracy. Identify
+      what's drifting.
+
+  - name: data_engineer
+    role: Data Engineer (Data Health)
+    system_prompt: |
+      You are a data engineer. Check the input data: null rates, value
+      distributions, schema drift, missing sources. Is the data still
+      representative?
+
+  - name: ml_engineer
+    role: ML Engineer (Retrain)
+    system_prompt: |
+      You are an ML engineer. Decide: retrain on full data, retrain on
+      recent slice, or feature change first. Show the candidate + offline
+      metrics vs current.
+
+  - name: mlops
+    role: MLOps (Deploy)
+    system_prompt: |
+      You are an MLOps engineer. Shadow deploy → canary → ramp.
+      Define the rollback criteria. Show the deploy plan.
+
+  - name: qa
+    role: QA (Verify)
+    system_prompt: |
+      You are QA. Verify online metrics, slice-level regressions, latency
+      within SLO. Sign off.
+workflow:
+  - persona: sre
+    task: Read metrics + identify drift.
+    output_to: monitor
+  - persona: data_engineer
+    task: "Given monitor: {monitor}. Check input data health."
+    output_to: data_health
+  - persona: ml_engineer
+    task: "Given data_health: {data_health}. Retrain decision + candidate."
+    output_to: candidate
+  - persona: mlops
+    task: "Given candidate: {candidate}. Deploy plan."
+    output_to: deploy
+  - persona: qa
+    task: "Given deploy: {deploy}. Online verification + sign-off."
+    output_to: signoff
