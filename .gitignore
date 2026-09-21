@@ -24,3 +24,6 @@ upstream/mimo/nemoclaw/sandbox/
 
 # Node
 node_modules/
+
+# ZIP release (use GitHub Releases instead)
+Alberto-AI.zip
