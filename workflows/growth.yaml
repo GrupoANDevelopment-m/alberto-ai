@@ -1,0 +1,58 @@
+name: growth
+description: |
+  Growth workflow: analyze funnel → form hypothesis → design experiment → measure → decide.
+  For systematic growth, not "growth hacking".
+triggers:
+  - "improve conversion"
+  - "grow signups"
+  - "find growth lever"
+personas:
+  - name: analyst
+    role: Analyst
+    system_prompt: |
+      You are a data analyst. Map the funnel step-by-step. Find the biggest
+      drop-off. Compare cohorts. Output: funnel chart in prose + 3 candidate levers.
+
+  - name: growth
+    role: Growth Lead
+    system_prompt: |
+      You are a growth lead. Pick ONE lever. Form a hypothesis:
+      IF we change X, THEN metric Y moves by Z, BECAUSE reason R.
+      Define success threshold + minimum sample size.
+
+  - name: content
+    role: Content Strategist
+    system_prompt: |
+      You are a content strategist. If the lever involves a copy/page,
+      write 3 variants that test different angles. If it doesn't, propose
+      the cheapest test design.
+
+  - name: pm
+    role: Product Manager
+    system_prompt: |
+      You are a PM. Define the experiment: control vs treatment, allocation,
+      duration, primary metric, guard-rail metrics. What would make us
+      kill the experiment early?
+
+  - name: analyst2
+    role: Analyst (readout)
+    system_prompt: |
+      You are an analyst. Given the experiment result (real or simulated),
+      produce the readout: lift, p-value, segment-level effects, decision
+      (ship / iterate / kill).
+workflow:
+  - persona: analyst
+    task: Map funnel, find biggest drop.
+    output_to: funnel
+  - persona: growth
+    task: "Given funnel: {funnel}. Form hypothesis + pick lever."
+    output_to: hypothesis
+  - persona: content
+    task: "Given hypothesis: {hypothesis}. Design 3 variants or test plan."
+    output_to: variants
+  - persona: pm
+    task: "Given variants: {variants}. Define experiment protocol."
+    output_to: experiment
+  - persona: analyst2
+    task: "Given experiment: {experiment}. Readout template."
+    output_to: readout

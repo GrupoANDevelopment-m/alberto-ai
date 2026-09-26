@@ -1,0 +1,8 @@
+{
+  "scenario": "01-cli-chat",
+  "title": "Chat natural em PT-BR com LLM real",
+  "command": "alberto chat 'Ola Alberto, qual e a capital do Brasil?'",
+  "result": "Resposta do LLM em PT-BR",
+  "real_components": ["model_router", "conversation", "alberto.__init__", "Hermes+NemoClaw"],
+  "evidence": "Funcionou quando 'alberto model set' foi configurado"
+}

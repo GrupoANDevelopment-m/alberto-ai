@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "content": "Vejo um caminho de madeira que atravessa um campo gramado verde sob um céu azul com nuvens.",
+  "thinking": "",
+  "model": "google/diffusiongemma-26b-a4b-it",
+  "usage": {
+    "prompt_tokens": 296,
+    "total_tokens": 545,
+    "completion_tokens": 249,
+    "prompt_tokens_details": null
+  }
+}

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alberto AI 🤖 — Sandboxed Multi-Agent Coding Assistant</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/chat.css" />
+  <link rel="stylesheet" href="css/panels.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D canvas background -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- Vignette overlay -->
+  <div class="vignette"></div>
+
+  <!-- Main app shell -->
+  <div class="app">
+
+    <!-- Top bar -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#7c3aed" />
+                <stop offset="100%" stop-color="#06b6d4" />
+              </linearGradient>
+            </defs>
+            <circle cx="16" cy="16" r="14" fill="url(#logo-grad)" opacity="0.2" />
+            <circle cx="16" cy="16" r="10" fill="none" stroke="url(#logo-grad)" stroke-width="1.5" />
+            <circle cx="16" cy="16" r="3" fill="url(#logo-grad)" />
+            <circle cx="16" cy="6" r="1.5" fill="#06b6d4" />
+            <circle cx="16" cy="26" r="1.5" fill="#7c3aed" />
+            <circle cx="6" cy="16" r="1.5" fill="#06b6d4" />
+            <circle cx="26" cy="16" r="1.5" fill="#7c3aed" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">Alberto AI</div>
+          <div class="brand-tag">v1.0 · Sandbox Multi-Agent</div>
+        </div>
+      </div>
+
+      <nav class="top-nav">
+        <button class="nav-btn active" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="squads">Squads</button>
+        <button class="nav-btn" data-view="memory">Memória</button>
+        <button class="nav-btn" data-view="shortcuts">Atalhos</button>
+        <button class="nav-btn" data-view="tools">Tools</button>
+        <button class="nav-btn" data-view="settings">Config</button>
+      </nav>
+
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="status-text">connecting…</span>
+      </div>
+    </header>
+
+    <!-- View: Chat -->
+    <main class="view view-chat active" data-view="chat">
+      <aside class="sidebar-left">
+        <div class="panel">
+          <h3 class="panel-title">Engine Ativo</h3>
+          <div class="engine-grid" id="engine-grid">
+            <div class="engine-card" data-engine="mimo">
+              <div class="engine-icon">🧠</div>
+              <div class="engine-name">MiMo</div>
+              <div class="engine-state">primary · always-on</div>
+              <div class="engine-pulse"></div>
+            </div>
+            <div class="engine-card" data-engine="hermes">
+              <div class="engine-icon">🌐</div>
+              <div class="engine-name">Hermes</div>
+              <div class="engine-state">complement · opt-in</div>
+              <div class="engine-pulse"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">Squad Ativo</h3>
+          <div class="squad-status" id="squad-status">
+            <div class="squad-empty">nenhum squad ativo</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">Modelo</h3>
+          <div class="model-status" id="model-status">
+            <div class="model-row"><span class="lbl">chat</span><span class="val" id="m-chat">—</span></div>
+            <div class="model-row"><span class="lbl">code</span><span class="val" id="m-code">—</span></div>
+            <div class="model-row"><span class="lbl">reasoning</span><span class="val" id="m-reasoning">—</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="chat-main">
+        <div class="chat-header">
+          <div class="chat-title">
+            <span class="chat-greeting" id="chat-greeting">Olá, eu sou o Alberto.</span>
+          </div>
+          <div class="chat-actions">
+            <button class="ghost-btn" id="btn-clear">↺ limpar</button>
+            <button class="ghost-btn" id="btn-voice">🎙️ voz</button>
+            <button class="ghost-btn" id="btn-upload">📎 arquivo</button>
+          </div>
+        </div>
+
+        <div class="chat-scroll" id="chat-scroll">
+          <div class="chat-empty" id="chat-empty">
+            <div class="chat-empty-logo">
+              <svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="40" cy="40" r="36" fill="none" stroke="url(#empty-grad)" stroke-width="1" opacity="0.4" />
+                <circle cx="40" cy="40" r="24" fill="none" stroke="url(#empty-grad)" stroke-width="1" opacity="0.6" />
+                <circle cx="40" cy="40" r="12" fill="url(#empty-grad)" opacity="0.3" />
+                <circle cx="40" cy="40" r="4" fill="#7c3aed" />
+                <defs>
+                  <radialGradient id="empty-grad">
+                    <stop offset="0%" stop-color="#7c3aed" />
+                    <stop offset="100%" stop-color="#06b6d4" />
+                  </radialGradient>
+                </defs>
+              </svg>
+            </div>
+            <h2>Comece a escrever.</h2>
+            <p>Eu faço o resto: memória persistente, squads, tools, atalhos.</p>
+            <div class="chat-suggestions">
+              <button class="suggestion" data-prompt="implement a REST API for todos">implement a REST API for todos</button>
+              <button class="suggestion" data-prompt="research best practices for vector databases">research best practices for vector databases</button>
+              <button class="suggestion" data-prompt="what's the best approach for caching in Next.js?">what's the best approach for caching in Next.js?</button>
+              <button class="suggestion" data-prompt="/aiox-squad activate engineering">/aiox-squad activate engineering</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-composer">
+          <div class="composer-toolbar">
+            <button class="tool-btn" id="tool-attachment" title="anexar arquivo">📎</button>
+            <button class="tool-btn" id="tool-screenshot" title="screenshot">📸</button>
+            <button class="tool-btn" id="tool-voice-input" title="voz">🎙️</button>
+            <div class="composer-spacer"></div>
+            <div class="composer-mode" id="composer-mode">
+              <span class="mode-label">modo</span>
+              <span class="mode-value" id="mode-value">solo</span>
+            </div>
+          </div>
+          <div class="composer-row">
+            <textarea
+              id="composer"
+              placeholder="Escreva em pt-BR ou inglês. Eu cuido do resto."
+              rows="1"
+              autocomplete="off"
+              spellcheck="false"></textarea>
+            <button class="send-btn" id="send-btn" title="enviar (Enter)">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 12L22 3L13 22L11 13L2 12Z" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
+          <div class="composer-hint" id="composer-hint">
+            Enter envia · Shift+Enter quebra linha · <code>/</code> abre comandos · <code>/s</code> atalhos
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- View: Squads -->
+    <main class="view" data-view="squads">
+      <div class="view-header">
+        <h1>Squads</h1>
+        <p class="view-sub">Workflows YAML opt-in. Ative um squad pra mudar o modo do agente.</p>
+      </div>
+      <div class="squads-grid" id="squads-grid"></div>
+    </main>
+
+    <!-- View: Memory -->
+    <main class="view" data-view="memory">
+      <div class="view-header">
+        <h1>Memória</h1>
+        <p class="view-sub">FTS5-backed, persistente entre sessões. Tudo que eu lembro.</p>
+      </div>
+      <div class="memory-layout">
+        <div class="memory-search">
+          <input type="text" id="memory-search-input" placeholder="buscar na memória…" />
+          <button class="primary-btn" id="memory-add-btn">+ adicionar</button>
+        </div>
+        <div class="memory-list" id="memory-list"></div>
+      </div>
+    </main>
+
+    <!-- View: Shortcuts -->
+    <main class="view" data-view="shortcuts">
+      <div class="view-header">
+        <h1>Atalhos</h1>
+        <p class="view-sub">Comandos curtos que crescem com você. <code>/s add &lt;key&gt; &lt;exp&gt;</code></p>
+      </div>
+      <div class="shortcuts-list" id="shortcuts-list"></div>
+    </main>
+
+    <!-- View: Tools -->
+    <main class="view" data-view="tools">
+      <div class="view-header">
+        <h1>Tools</h1>
+        <p class="view-sub">Capacidades que posso executar. Herma (browser, code-exec, cron) + MiMo (memory, goal, max, compose).</p>
+      </div>
+      <div class="tools-grid" id="tools-grid"></div>
+    </main>
+
+    <!-- View: Settings -->
+    <main class="view" data-view="settings">
+      <div class="view-header">
+        <h1>Config</h1>
+        <p class="view-sub">Configure modelos, providers, credenciais. Tudo OpenAI-compat.</p>
+      </div>
+      <div class="settings-layout">
+        <section class="settings-section">
+          <h2>Models</h2>
+          <div id="settings-models"></div>
+          <button class="primary-btn" id="settings-add-model">+ adicionar model</button>
+        </section>
+        <section class="settings-section">
+          <h2>Sandbox</h2>
+          <div class="kv-row"><span class="lbl">kind</span><span class="val" id="cfg-sandbox">local</span></div>
+          <div class="kv-row"><span class="lbl">home</span><span class="val mono" id="cfg-home">/sandbox</span></div>
+        </section>
+        <section class="settings-section">
+          <h2>Engines</h2>
+          <div class="kv-row"><span class="lbl">MiMo</span><span class="val">always-on (primary)</span></div>
+          <div class="kv-row"><span class="lbl">Hermes</span><span class="val">opt-in via /hermes</span></div>
+        </section>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Command palette (slash autocomplete) -->
+  <div class="palette" id="palette">
+    <input type="text" id="palette-input" placeholder="buscar comando… (ou /help)" />
+    <div class="palette-results" id="palette-results"></div>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">título</h3>
+        <button class="modal-close" id="modal-close">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

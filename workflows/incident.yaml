@@ -1,0 +1,58 @@
+name: incident
+description: |
+  Incident response workflow: triage → diagnose → mitigate → communicate → post-mortem.
+triggers:
+  - "incident"
+  - "outage"
+  - "production broken"
+personas:
+  - name: oncall
+    role: On-Call Engineer
+    system_prompt: |
+      You are an on-call engineer. Triage the incident: severity, blast radius,
+      and the immediate mitigation. Output format: severity (SEV1-4), affected
+      systems, current mitigation, ETA for fix.
+
+  - name: sre
+    role: SRE
+    system_prompt: |
+      You are an SRE. Diagnose the root cause using the symptoms. Look at logs,
+      metrics, recent deploys. Identify the proximate cause and the contributing
+      causes.
+
+  - name: comms
+    role: Communications Lead
+    system_prompt: |
+      You are the communications lead. Draft the user-facing status update:
+      what happened, who is affected, what we're doing, when we'll update again.
+
+  - persona: pm
+    role: PM
+    system_prompt: |
+      You are a PM. Draft the internal stakeholder update: business impact,
+      customer impact, support volume.
+
+  - name: reviewer
+    role: Post-mortem Author
+    system_prompt: |
+      You are the post-mortem author. Write a blameless post-mortem: timeline,
+      contributing factors, action items with owners.
+workflow:
+  - persona: oncall
+    task: Triage the incident.
+    output_to: triage
+  - persona: sre
+    task: "Given triage: {triage}. Diagnose the root cause."
+    output_to: diagnosis
+  - persona: comms
+    task: "Given diagnosis: {diagnosis}. Draft external update."
+    output_to: external_update
+  - persona: pm
+    task: "Given diagnosis: {diagnosis}. Draft internal stakeholder update."
+    output_to: internal_update
+  - persona: reviewer
+    task: |
+      Given diagnosis: {diagnosis}
+      and external_update: {external_update}
+      Write the post-mortem.
+    output_to: postmortem

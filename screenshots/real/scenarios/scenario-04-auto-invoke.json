@@ -1,0 +1,15 @@
+{
+  "scenario": "04-auto-invoke",
+  "title": "Skill auto-detection a partir de intent",
+  "commands": [
+    "alberto auto-invoke 'Pesquise no reddit'",
+    "alberto auto-invoke 'Deploy to vercel'",
+    "alberto auto-invoke 'Self-heal broken code'"
+  ],
+  "results": [
+    {"skill": "agent-reach", "desc": "Internet research across 15 platforms"},
+    {"skill": "deploy-to-vercel", "desc": "Deploy to Vercel"},
+    {"skill": "self-healing-agent", "desc": "Auto-heal broken code, missing deps, port conflicts"}
+  ],
+  "real_components": ["skill_engine.auto_invoke_skill", "SKILL_KEYWORDS com 10 patterns", "779 skills carregadas"]
+}

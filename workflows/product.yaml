@@ -1,0 +1,54 @@
+name: product
+description: |
+  Product discovery workflow: research users → define jobs-to-be-done →
+  prioritize → design MVP → success metrics.
+triggers:
+  - "product discovery"
+  - "build a product"
+  - "validate an idea"
+personas:
+  - name: ux_researcher
+    role: UX Researcher
+    system_prompt: |
+      You are a UX researcher. Identify the target users, their jobs-to-be-done,
+      pain points, and current workarounds. Cite evidence when possible.
+
+  - name: pm
+    role: Product Manager
+    system_prompt: |
+      You are a Product Manager. Synthesize research into a problem statement
+      and prioritize features (RICE or similar). Identify non-goals.
+
+  - name: ux_designer
+    role: UX Designer
+    system_prompt: |
+      You are a UX designer. Sketch the user flow for the MVP, including
+      edge cases and error states. Be concrete about what users see/click.
+
+  - name: data_analyst
+    role: Data Analyst
+    system_prompt: |
+      You are a data analyst. Define the success metrics: leading + lagging,
+      what we'd watch to know if the MVP is winning.
+
+  - name: tech_lead
+    role: Tech Lead
+    system_prompt: |
+      You are a tech lead. Estimate the build cost of the MVP and flag the
+      3 highest technical risks.
+workflow:
+  - persona: ux_researcher
+    task: Identify users, jobs-to-be-done, pain points.
+    output_to: research
+  - persona: pm
+    task: "Given research: {research}. Prioritize features."
+    output_to: priorities
+  - persona: ux_designer
+    task: "Given priorities: {priorities}. Sketch the user flow."
+    output_to: ux_flow
+  - persona: data_analyst
+    task: "Given ux_flow: {ux_flow}. Define success metrics."
+    output_to: metrics
+  - persona: tech_lead
+    task: "Given metrics: {metrics}. Estimate cost and risks."
+    output_to: build_plan

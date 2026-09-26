@@ -1,0 +1,15 @@
+{
+  "scenario": "03-security",
+  "title": "NemoClaw security: detecta e bloqueia",
+  "commands": [
+    "alberto security scan 'API key nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234; GitHub ghp_...'",
+    "alberto security path /etc/shadow",
+    "alberto security path /root/.ssh/id_rsa"
+  ],
+  "results": [
+    "FOUND 2 secret(s): NVIDIA API key + GitHub token (redacted)",
+    "BLOCKED: /etc/shadow",
+    "BLOCKED: /root/.ssh/id_rsa"
+  ],
+  "real_components": ["nemoclaw_real.scan_secrets", "nemoclaw_real.is_protected_path", "36 SECRET_PATTERNS", "18 PROTECTED_PATH_PATTERNS"]
+}

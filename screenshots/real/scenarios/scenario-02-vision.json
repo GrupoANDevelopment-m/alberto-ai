@@ -1,0 +1,9 @@
+{
+  "scenario": "02-vision",
+  "title": "Vision API real com thinking em PT-BR",
+  "command": "alberto vision 'O que voce ve?' <image_url>",
+  "result": "Vejo um caminho de madeira que atravessa um campo gramado verde sob um ceu azul com nuvens.",
+  "model": "google/diffusiongemma-26b-a4b-it",
+  "tokens": {"prompt": 296, "completion": 249, "total": 545},
+  "real_components": ["vision (call_multimodal_kimi)", "diffusiongemma-26b-a4b-it", "chat_template_kwargs.enable_thinking"]
+}

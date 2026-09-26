@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html><head><title>Alberto AI - Chat Mode Image Gen</title>
+<style>
+body { background:#0a0a14; color:#d4d4d8; font-family:-apple-system,sans-serif; padding:32px; margin:0; }
+h1 { color:#06b6d4; margin-bottom:8px; }
+.meta { background:#164e63; color:#cffafe; padding:6px 12px; border-radius:6px; font-size:12px; display:inline-block; margin-right:6px; margin-bottom:6px; }
+.gallery { display:grid; grid-template-columns:repeat(auto-fit,minmax(400px,1fr)); gap:24px; margin-top:24px; }
+.card { background:#18181b; border:1px solid #27272a; border-radius:12px; padding:16px; }
+.card img { width:100%; height:auto; border-radius:8px; display:block; }
+.card h3 { margin:12px 0 4px 0; color:#f59e0b; font-size:16px; }
+.card p { margin:4px 0; color:#a1a1aa; font-size:13px; line-height:1.5; }
+.prompt { background:#27272a; padding:8px 12px; border-radius:6px; font-size:12px; line-height:1.4; margin-top:8px; }
+.stats { background:#14532d; color:#bbf7d0; padding:12px; border-radius:6px; margin:12px 0; }
+</style></head><body>
+<h1>🎨 Alberto AI - Chat Mode Image Generation</h1>
+<p>
+  <span class="meta">Model: flux.1-dev</span>
+  <span class="meta">LLM: diffusiongemma-26b</span>
+  <span class="meta">Endpoint: /v1/genai/black-forest-labs/flux.1-dev</span>
+  <span class="meta">Tool: function calling (OpenAI-compat)</span>
+</p>
+
+<div class="stats">
+<strong>Pipeline funcionando:</strong> User (PT-BR) → Chat LLM → tool_calls JSON → flux.1-dev → JPEG 1024x1024<br>
+<strong>Total:</strong> 5/5 imagens geradas | <strong>Tempo médio:</strong> 5.7s | <strong>Resolução:</strong> 1024x1024
+</div>
+
+<div class="gallery">
+<div class="card">
+<img src="angola-luanda-sunset.jpg" alt="Luanda">
+<h3>Baia de Luanda ao por do sol</h3>
+<p>179KB · 6.1s · 1024x1024</p>
+<div class="prompt">User: "Baia de Luanda ao por do sol"<br>
+LLM: "A breathtaking wide-angle view of Luanda Bay in Angola at sunset. In the background, the iconic skyline with modern buildings reflected in the calm waters of the Atlantic Ocean..."</div>
+</div>
+
+<div class="card">
+<img src="brazil-christ-redeemer.jpg" alt="Rio">
+<h3>Cristo Redentor - Rio de Janeiro</h3>
+<p>70KB · 5.7s · 1024x1024</p>
+<div class="prompt">User: "Cristo Redentor no Rio de Janeiro"<br>
+LLM: "A breathtaking, cinematic wide shot of the Christ the Redeemer statue standing atop Corcovado Mountain..."</div>
+</div>
+
+<div class="card">
+<img src="angola-african-lion.jpg" alt="Lion">
+<h3>Leao Africano - Savana Angolana</h3>
+<p>134KB · 5.7s · 1024x1024</p>
+<div class="prompt">User: "Leao Africano na savana angolana"<br>
+LLM: "A majestic African lion with a thick mane, standing proudly on a rocky outcrop in the Angolan savanna at sunset..."</div>
+</div>
+
+<div class="card">
+<img src="african-women-traditional.jpg" alt="African Women">
+<h3>Mulheres Africanas em Trajes Tradicionais</h3>
+<p>213KB · 5.9s · 1024x1024</p>
+<div class="prompt">User: "Mulheres Africanas em trajes tradicionais coloridos"<br>
+LLM: "A high-resolution, cinematic portrait of a group of African women standing together wearing vibrant and intricate traditional clothing..."</div>
+</div>
+
+<div class="card">
+<img src="futuristic-ai-luanda.jpg" alt="AI Machine">
+<h3>Maquina Futurista de IA em Luanda</h3>
+<p>6KB · 5.0s · 1024x1024</p>
+<div class="prompt">User: "Maquina futurista de IA em Luanda com luzes neon"<br>
+LLM: "A massive, highly futuristic AI supercomputer standing in the heart of Luanda, Angola. The machine is made of sleek chrome..."</div>
+</div>
+</div>
+
+<h2>Como funciona (código real)</h2>
+<pre style="background:#27272a;padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;color:#e4e4e7;">
+# 1. Chat com tool definition
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "generate_image",
+        "description": "Generate an image",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "width": {"type": "integer", "default": 1024},
+                "height": {"type": "integer", "default": 1024},
+                "steps": {"type": "integer", "default": 25},
+                "seed": {"type": "integer", "default": 42}
+            },
+            "required": ["prompt"]
+        }
+    }
+}]
+
+# 2. User pergunta em linguagem natural
+r = requests.post(
+    "https://integrate.api.nvidia.com/v1/chat/completions",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={
+        "model": "google/diffusiongemma-26b-a4b-it",
+        "messages": [
+            {"role":"user","content":"Gere uma imagem da Baia de Luanda"}
+        ],
+        "tools": tools,
+        "tool_choice": "auto"
+    }
+)
+# Resposta: tool_calls[0].function.arguments = '{"prompt":"..."}'
+
+# 3. Executa image gen
+r_img = requests.post(
+    "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={
+        "prompt": args['prompt'],
+        "mode": "base",
+        "cfg_scale": 3.5,
+        "width": 1024,
+        "height": 1024,
+        "seed": 42,
+        "steps": 25
+    }
+)
+img = base64.b64decode(r_img.json()['artifacts'][0]['base64'])
+</pre>
+
+</body></html>
