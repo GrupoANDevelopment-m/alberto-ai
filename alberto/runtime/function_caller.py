@@ -48,13 +48,47 @@ def register_tool(name: str):
 
 # ===================== Tools =====================
 
+# SECURITY (v1.7): Whitelist/blocklist for shell commands
+BLOCKED_SHELL_PATTERNS = [
+    r"rm\s+-rf\s+/",
+    r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:",  # fork bomb
+    r"mkfs\b",
+    r"\bdd\s+if=/dev/zero\b",
+    r"curl\s+[^|]+\|\s*(sh|bash)\b",
+    r"wget\s+[^|]+\|\s*(sh|bash)\b",
+    r"chmod\s+777\s+/",
+    r"chown\s+-R\s+.*\s+/(\s|$)",
+    r">\s*/dev/sd[a-z]",
+    r"\bshutdown\b",
+    r"\breboot\b",
+]
+import re as _re_security
+_BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
+
+
 @register_tool("run_shell")
 def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
-    """Run a shell command. Args: command (str), timeout (int, default 30)."""
+    """Run a shell command. Args: command (str), timeout (int, default 30).
+
+    SECURITY (v1.7): Blocked-shell-pattern check applied.
+    """
     cmd = args.get("command", "")
     timeout = int(args.get("timeout", 30))
     if not cmd:
         return "no command provided", True
+    blocked_match = _BLOCKED_RE.search(cmd)
+    if blocked_match:
+        try:
+            from . import audit
+            audit.log_blocked_shell(cmd, blocked_match.group(0))
+        except ImportError:
+            pass
+        return f"BLOCKED by Alberto security: matches '{blocked_match.group(0)}'. Original: {cmd[:200]!r}", True
+    try:
+        from . import audit
+        audit.log_event("shell_exec", {"cmd": cmd[:500], "timeout": timeout})
+    except ImportError:
+        pass
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         out = (r.stdout or "") + (r.stderr or "")
@@ -85,16 +119,28 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("file_write")
 def tool_file_write(alberto, args: Dict) -> Tuple[str, bool]:
-    """Write a file. Args: path (str), content (str)."""
+    """Write a file. Args: path (str), content (str).
+
+    SECURITY (v1.7): NemoClaw pre-write check applied.
+    """
     path = args.get("path", "")
     content = args.get("content", "")
     if not path:
         return "no path provided", True
     try:
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, msg_or_path, final_content = nemoclaw_pre_write_check(alberto, path, content)
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {msg_or_path}", True
+            content = final_content
+            path = msg_or_path
+        except ImportError:
+            pass
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-        return f"wrote {len(content)} bytes to {path}", False
+        return f"wrote {len(content)} bytes to {path} (NemoClaw-checked)", False
     except Exception as e:
         return f"error: {e}", True
 
