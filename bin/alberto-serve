@@ -194,7 +194,10 @@ def main():
     args = p.parse_args()
 
     # Step 1: lock
-    pidfile = Path("/tmp/alberto-serve.pid")
+    import getpass
+    user_pidfile = Path(f"/tmp/alberto-serve-{getpass.getuser()}.pid")
+    xdg_pidfile = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "alberto-serve.pid"
+    pidfile = xdg_pidfile if xdg_pidfile.parent.exists() else user_pidfile
     if check_lock(pidfile):
         print(f"[alberto-serve] another instance is running (PID file {pidfile}). "
               f"Use --kill-existing to force.", file=sys.stderr, flush=True)
@@ -232,14 +235,25 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    cleanup_done = False
     try:
         if args.no_watchdog:
             rc = run_one(port, args.host)
             sys.exit(rc)
         else:
             watchdog_loop(port, args.max_restarts, args.host)
+    except KeyboardInterrupt:
+        pass
+    except SystemExit:
+        cleanup_done = True
+        raise
     finally:
-        pidfile.unlink(missing_ok=True)
+        try:
+            pidfile.unlink(missing_ok=True)
+            if not cleanup_done:
+                print(f"[alberto-serve] cleaned up PID file: {pidfile}", flush=True)
+        except Exception as e:
+            print(f"[alberto-serve] cleanup error (non-fatal): {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

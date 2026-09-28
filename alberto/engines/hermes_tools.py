@@ -1772,3 +1772,62 @@ def list_upstream_hermes_tools():
 
 def list_upstream_hermes_skills():
     return list_upstream_skills()
+
+
+
+# ===================== v1.8: Unified Web Search with Browser Fallback =====================
+
+def _try_browser_search(query: str, max_results: int = 5) -> dict:
+    """Real browser-based web search using installed Chromium.
+
+    Closes G-F6: Web search now uses local browser extension
+    (installed Playwright + Chromium) instead of requiring paid API keys.
+
+    Used as FALLBACK when no search API key is available.
+
+    Tries multiple engines in order:
+    1. DuckDuckGo HTML (no JS, no captcha) — primary
+    2. Brave Search HTML (no captcha)
+    3. Wayback Machine (CDN-tolerant)
+    """
+    engines = [
+        ("duckduckgo", "https://html.duckduckgo.com/html/?q={q}", ".result__a", "href"),
+        ("brave", "https://search.brave.com/search?q={q}", ".snippet h2 a, .title a", "href"),
+        ("lite.duckduckgo", "https://lite.duckduckgo.com/lite/?q={q}", ".result-link", "href"),
+    ]
+    for engine_name, url_template, selector, attr in engines:
+        try:
+            from playwright.sync_api import sync_playwright
+            import time
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    executable_path="/root/.cache/ms-playwright/chromium-1243/chrome-linux/chrome",
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                    headless=True,
+                )
+                context = browser.new_context(
+                    ignore_https_errors=True,
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                )
+                page = context.new_page()
+                encoded_query = query.replace(" ", "+")
+                url = url_template.format(q=encoded_query)
+                page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                time.sleep(1.0)
+                results = page.query_selector_all(selector)
+                output = []
+                for r in results[:max_results]:
+                    title = r.inner_text().strip()
+                    href = r.get_attribute(attr) or ""
+                    if title and href:
+                        output.append({"title": title, "url": href})
+                browser.close()
+                if output:
+                    return {"ok": True, "results": output, "engine": engine_name + "-via-playwright"}
+        except Exception as e:
+            continue
+    return {"ok": False, "error": "all search engines failed (rate-limited or bot detected)", "engine": "multi"}

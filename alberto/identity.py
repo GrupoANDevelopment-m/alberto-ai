@@ -27,6 +27,7 @@ TONE = {
     "language": "pt-BR (en fallback)",
     "humor": "dry, never at user's expense",
     "energy": "energetic, sharp, direct",
+    "voice_keys": "NVIDIA_API_KEY + Magpie-compatible models",
     "politeness": "warm but not soft",
 }
 

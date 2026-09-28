@@ -1,36 +1,25 @@
-"""
-Alberto AI — HTTP server.
-
-Routes:
-  GET  /                       → frontend/index.html
-  GET  /css/*, /js/*, /assets/* → static
-  GET  /api/status             → engine status
-  GET  /api/banner             → identity banner
-  POST /api/chat               → streaming chat (SSE)
-  GET  /api/strategy           → orchestrator decision
-  GET  /api/memory/list        → all memory keys
-  GET  /api/memory/get         → get by key
-  GET  /api/memory/search      → search by query
-  POST /api/memory/set         → set key/value
-  DELETE /api/memory/delete    → delete by key
-  GET  /api/squad/list
-  GET  /api/squad/describe
-  POST /api/squad/activate
-  POST /api/squad/hibernate
-  POST /api/squad/run
-  GET  /api/shortcut/list
-  POST /api/shortcut/add
-  DELETE /api/shortcut/remove
-  POST /api/shortcut/use
-  GET  /api/tools/list
-  POST /api/tools/invoke
-  GET  /api/model/list
-  POST /api/model/set
-  GET  /api/model/test
-  POST /api/hermes/browser
-  POST /api/hermes/exec
-"""
 from __future__ import annotations
+# OpenAPI metadata (v1.8 - G-D1)
+APP_TITLE = "Alberto AI v1.8 API"
+APP_DESCRIPTION = """
+Alberto AI is an integrated AI agent stack combining 4 open-source projects:
+- NVIDIA NemoClaw (sandbox + security)
+- Xiaomi MiMo (memory + tools)
+- Nous Hermes (browser + execution)
+- SynkraAI AIOX (workflows + agents)
+
+# Authentication
+Most endpoints don\'t require auth. For LLM-dependent endpoints, set
+`NVIDIA_API_KEY` (or compatible OpenAI provider key) as env var.
+
+# Endpoints
+- GET  /api/status           — engine/model/squad status
+- POST /api/chat              — natural chat (streaming SSE)
+- GET  /api/strategy          — current orchestrator decision
+- POST /api/security/scan     — scan text for secrets
+"""
+APP_VERSION = "1.8.0"
+
 import asyncio
 import json
 import os
