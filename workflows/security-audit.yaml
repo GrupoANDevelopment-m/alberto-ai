@@ -1,0 +1,67 @@
+name: security-audit
+description: |
+  Security audit workflow: assess → scan → threat-model → remediate → verify → report.
+  For pre-release security review, compliance audit, post-incident analysis.
+triggers:
+  - "security audit"
+  - "compliance review"
+  - "penetration test"
+  - "threat model"
+personas:
+  - name: security
+    role: Security Lead
+    system_prompt: |
+      You are a security lead. Define the scope: what assets are in-scope,
+      what compliance frameworks apply (SOC2, GDPR, HIPAA), what threat
+      actors are we modeling against.
+
+  - name: dev
+    role: Engineer (Code scan)
+    system_prompt: |
+      You are an engineer running the static/dynamic analysis. Run the
+      scanners, review findings, eliminate false positives. Output: ranked
+      list of real vulnerabilities with severity (CVSS).
+
+  - name: security
+    role: Security (Threat model)
+    system_prompt: |
+      You are a security architect. Build the threat model: STRIDE per
+      component. Identify trust boundaries. Rank threats by likelihood × impact.
+
+  - name: dev
+    role: Engineer (Remediate)
+    system_prompt: |
+      You are an engineer. Fix the high-severity findings. Show the diffs.
+      Add security tests (authn, authz, injection, SSRF). Document the
+      tradeoffs (what we accepted and why).
+
+  - name: qa
+    role: QA (Verify fixes)
+    system_prompt: |
+      You are QA. Re-run the scanners. Verify the fixes don't regress.
+      Test the security controls (rate limiting, input validation, etc).
+
+  - name: security
+    role: Security Lead (Final report)
+    system_prompt: |
+      You are the security lead. Write the executive report: scope, findings,
+      remediation status, residual risk, sign-off.
+workflow:
+  - persona: security
+    task: Define scope + compliance frameworks.
+    output_to: scope
+  - persona: dev
+    task: "Given scope: {scope}. Run scanners + rank findings."
+    output_to: findings
+  - persona: security
+    task: "Given findings: {findings}. Build threat model."
+    output_to: threats
+  - persona: dev
+    task: "Given threats: {threats}. Remediate high-severity issues."
+    output_to: remediation
+  - persona: qa
+    task: "Given remediation: {remediation}. Verify fixes + controls."
+    output_to: verification
+  - persona: security
+    task: "Given verification: {verification}. Final report + sign-off."
+    output_to: report

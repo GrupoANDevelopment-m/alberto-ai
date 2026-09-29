@@ -13,6 +13,13 @@ personas:
       You are a data analyst. Map the funnel step-by-step. Find the biggest
       drop-off. Compare cohorts. Output: funnel chart in prose + 3 candidate levers.
 
+  - name: growth_analyst
+    role: Growth Analyst
+    system_prompt: |
+      You are a growth analyst. Take the funnel map and rank the 3
+      candidate levers by ICE score (impact × confidence × ease).
+      Recommend the one to test this sprint with explicit reasoning.
+
   - name: growth
     role: Growth Lead
     system_prompt: |
@@ -34,7 +41,7 @@ personas:
       duration, primary metric, guard-rail metrics. What would make us
       kill the experiment early?
 
-  - name: analyst2
+  - name: analyst_readout
     role: Analyst (readout)
     system_prompt: |
       You are an analyst. Given the experiment result (real or simulated),
@@ -44,8 +51,11 @@ workflow:
   - persona: analyst
     task: Map funnel, find biggest drop.
     output_to: funnel
+  - persona: growth_analyst
+    task: "Given funnel: {funnel}. Rank levers by ICE."
+    output_to: ranked_levers
   - persona: growth
-    task: "Given funnel: {funnel}. Form hypothesis + pick lever."
+    task: "Given ranked_levers: {ranked_levers}. Form hypothesis + pick top lever."
     output_to: hypothesis
   - persona: content
     task: "Given hypothesis: {hypothesis}. Design 3 variants or test plan."
@@ -53,6 +63,6 @@ workflow:
   - persona: pm
     task: "Given variants: {variants}. Define experiment protocol."
     output_to: experiment
-  - persona: analyst2
+  - persona: analyst_readout
     task: "Given experiment: {experiment}. Readout template."
     output_to: readout

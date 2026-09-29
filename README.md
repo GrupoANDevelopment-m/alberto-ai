@@ -1,11 +1,11 @@
-# 🤖 Alberto AI v1.8
+# 🤖 Alberto AI v1.8.1
 
 **Integrated AI agent stack** combining 4 open-source projects additively:
 
 - 🛡️ **[NVIDIA NemoClaw](https://github.com/nvidia/nemoclaw)** — sandbox + security + 36 secret patterns
 - ⚡ **[Xiaomi MiMoCode](https://github.com/Xiaomi/mimo)** — FTS5 memory + 22 tools
 - 🧠 **[Nous Research Hermes](https://github.com/NousResearch/hermes-agent)** — browser + execution
-- 🔮 **[SynkraAI AIOX](https://github.com/synkraai/aiox)** — workflows + 23 agents
+- 🔮 **[SynkraAI AIOX](https://github.com/synkraai/aiox)** — workflows + 37 agents
 
 ---
 
@@ -42,16 +42,56 @@ alberto-serve --port 8741
 │ │ ├─ Model Router (OpenAI-compat, no hardcoded)   │   │
 │ │ ├─ Function Caller (32 tools)                   │   │
 │ │ ├─ Security Whitelist (3-tier)                  │   │
-│ │ ├─ Audit Log (~/.alberto/audit.log)              │   │
+│ │ ├─ Audit Log (~/.alberto/audit.log)             │   │
 │ │ └─ Skill Engine (779 skills, 10 auto-invoke)    │   │
 │ └──────────────────────────────────────────────────┘   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
 │  │ NemoClaw │ │ MiMo     │ │ Hermes   │ │ AIoX     │  │
 │  │ Security │ │ Memory+  │ │ Browser+ │ │ Workflows│  │
-│  │ (36+patt)│ │ 22 tools │ │ 38 tools │ │ 11 yamls │  │
+│  │ (36+patt)│ │ 22 tools │ │ 38 tools │ │ 15 yamls │  │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
+│         37 personas · 15 workflows · 80 steps         │
 └─────────────────────────────────────────────────────────┘
 ```
+
+## 📋 What's Inside (v1.8.1)
+
+### 15 Workflows · 80 Steps · 37 Personas · 0 Gaps
+
+| Domain | Workflow | Steps | Personas |
+|---|---|---|---|
+| **Engineering** | engineering | 5 | pm, architect, dev, qa, devops |
+| **ML** | data-ml, ml-ops | 5+5 | analyst, data_engineer, ml_engineer, mlops, sre, qa |
+| **Content** | content | 5 | researcher, content, writer, editor, tech_writer |
+| **Finance** | finance | 5 | finance, analyst, critic, pm, finance_recommender |
+| **Growth** | growth | 6 | analyst, growth_analyst, growth, content, pm, analyst_readout |
+| **Product** | product | 5 | ux_researcher, pm, ux_designer, data_analyst, tech_lead |
+| **Research** | research | 5 | researcher, reviewer, analyst, writer, critic |
+| **Sales** | sales | 5 | sales, pm, architect, finance, sales_closer |
+| **Support** | support | 5 | support, product, dev, qa, support_closer |
+| **Incident** | incident | 5 | oncall, sre, comms, pm, reviewer |
+| **Hiring** | hiring 🆕 | 6 | recruiter, tech_lead, dev, pm |
+| **Mentorship** | mentorship 🆕 | 6 | mentor, tech_lead, pm |
+| **Sprint** | sprint-planning 🆕 | 6 | scrum_master, pm, tech_lead, dev, qa |
+| **Security** | security-audit 🆕 | 6 | security, dev, qa |
+
+### 39 Tools (function_caller.py)
+
+| Category | Tools |
+|---|---|
+| File | `tool_file_read`, `tool_file_write`, `tool_file_append`, `tool_file_delete` |
+| Shell | `tool_run_shell` (whitelisted), `tool_process` |
+| Memory | `tool_memory_get`, `tool_memory_set`, `tool_memory_list`, `tool_memory_search` |
+| Skills | `tool_skill_list`, `tool_skill_invoke` |
+| Web | `tool_web_search` 🆕 (browser fallback) |
+| Image | `tool_generate_image` (flux.1-dev) |
+| Auto-invoke | `tool_auto_invoke` |
+| Security | `tool_security_scan`, `tool_security_path_check` |
+| Squad | `tool_squad_list`, `tool_squad_run` |
+
+### 38 Hermes Tools (hermes_tools.py)
+
+Browser (Playwright+Chromium), terminal, code_execution, file, vision, MCP, web fetch, etc — all with graceful fallback.
 
 ## 🎯 Features
 
@@ -64,6 +104,7 @@ alberto-serve --port 8741
 | **Voice TTS/STT** | 🔑 Requer Magpie key |
 | **Image generation** (flux.1-dev) | 🔑 Requer chave especial |
 | **Browser automation** (Playwright+Chromium) | ✅ Real |
+| **Web search** (browser fallback, sem API) | ✅ v1.8 |
 | **Skill auto-invoke** (10 patterns) | ✅ Real |
 | **Self-healing** (15 fixers) | ✅ Real |
 | **Audit log** (JSON lines) | ✅ Real |
@@ -71,9 +112,10 @@ alberto-serve --port 8741
 | **3D web UI** | ✅ Real |
 | **Docker image** | ✅ v1.8 |
 | **Mavis fallback** (when primary LLM fails) | ✅ Real |
-| **CLI smoke tests** (30+ subcommands) | ✅ v1.8 |
+| **CLI smoke tests** (9 subcommands) | ✅ v1.8 |
 | **CI/CD pipeline** (GitHub Actions) | ✅ v1.8 |
 | **Lockfile isolation** ($XDG_RUNTIME_DIR) | ✅ v1.8 |
+| **Workflow consistency** (15×80×37) | ✅ v1.8.1 |
 
 ## 🔒 Security (v1.7+)
 
@@ -84,45 +126,48 @@ alberto-serve --port 8741
 
 See [SECURITY-AUDIT.md](SECURITY-AUDIT.md) for full security audit (5.0/10 → 9.0/10 after v1.7 patches).
 
-## 🧪 Tests (v1.8)
+## 🧪 Tests (v1.8.1)
 
-- **229 tests passing**, **1 skipped** in 18s
+- **324 tests passing** in 60s
 - **20% coverage geral** (52-100% em módulos críticos)
 - **Zero mocks** — tudo usa serviços reais
 
 ```bash
-pytest tests/test_v15_unit.py      # 121 unit tests
-pytest tests/test_v15_real.py      # 67 real integration tests
-pytest tests/test_v15_components.py # 20 component integration tests
-pytest tests/test_v17_security.py  # 21 security regression tests
-pytest tests/test_cli_smoke.py     # 30+ CLI subcommand smoke tests (v1.8)
+pytest tests/test_v15_unit.py        # 121 unit tests
+pytest tests/test_v15_real.py        # 67 real integration tests
+pytest tests/test_v15_components.py  # 20 component integration tests
+pytest tests/test_v17_security.py    # 21 security regression tests
+pytest tests/test_v18_websearch.py   # 5 browser web search tests (v1.8)
+pytest tests/test_v18_workflows.py   # 147 workflow consistency tests (v1.8.1)
+pytest tests/test_cli_smoke.py       # 10 CLI subcommand smoke tests (v1.8)
 ```
 
-## 📦 What's Inside
+## 📦 Repository Structure
 
 ```
 alberto-ai/
-├── alberto/           # 39 Python files, 11.4K LoC
-│   ├── runtime/       # 15 modules (function_caller, smart_router, etc.)
-│   ├── engines/       # hermes_tools (38 tools), mimo (FTS5), hermes
-│   ├── personas/      # 23 personas
-│   ├── server/        # FastAPI (30+ endpoints)
-│   └── security_whitelist.py  # 3-tier whitelisting
-├── bin/               # alberto, alberto-serve (with watchdog)
-├── upstream/          # Real Hermes + MiMo + AIoX + NemoClaw source
-├── skills/            # 779 skills in 38 categories
-├── personas/          # 23 persona markdown files
-├── workflows/         # 11 squad YAML definitions
-├── tests/             # 7 test files, 250+ tests
-├── docs/              # V1.1 → V1.8 + SECURITY-AUDIT + GAPS-MAP
-├── Dockerfile         # v1.8: containerized deployment
-└── .github/workflows/ # v1.8: CI/CD pipeline
+├── alberto/                       # 53 Python files, 12K LoC
+│   ├── runtime/                   # 15 modules (function_caller, smart_router, etc.)
+│   ├── engines/                   # hermes_tools (38 tools), mimo (FTS5), hermes
+│   ├── personas/                  # 37 personas, SquadCatalog
+│   ├── server/                    # FastAPI (30+ endpoints, OpenAPI)
+│   └── security_whitelist.py      # 3-tier whitelisting
+├── bin/                           # alberto, alberto-serve (with watchdog)
+├── upstream/                      # Real Hermes + MiMo + AIoX + NemoClaw
+├── skills/                        # 779 skills in 38 categories
+├── personas/                      # 37 persona markdown files
+├── workflows/                     # 15 squad YAML definitions
+├── tests/                         # 8 test files, 324+ tests
+├── docs/                          # V1.1 → V1.8 + SECURITY-AUDIT + GAPS-MAP
+├── Dockerfile                     # v1.8: containerized deployment
+└── .github/workflows/             # v1.8: CI/CD pipeline
 ```
 
 ## 🗺️ Roadmap
 
 - **v1.7** ✅ Done: NemoClaw on all writes, shell whitelist, audit log
-- **v1.8** ✅ Done: CI/CD, OpenAPI, Docker, lockfile isolation, CLI tests
+- **v1.8** ✅ Done: CI/CD, OpenAPI, Docker, lockfile isolation, CLI tests, web search
+- **v1.8.1** ✅ Done: 14 new personas, 4 new workflows, 6 workflow fixes, 147 tests
 - **v2.0** ⏳ Next: Real image gen (requires NVIDIA Enterprise), Hermes voice
 - **v3.0** ⏳ Future: Multi-tenant, cloud-native
 
@@ -136,6 +181,7 @@ Apache 2.0
 - [GAPS-MAP.md](GAPS-MAP.md) — 71 gaps mapped (resolved + remaining)
 - [4-REAL-SCENARIOS.md](4-REAL-SCENARIOS.md) — 4 practical usage scenarios
 - [AUDIT-V1.5-COMPLETE.md](AUDIT-V1.5-COMPLETE.md) — Full system audit
+- [CHANGELOG-V1.8.md](CHANGELOG-V1.8.md) — v1.8 changes (8 gaps closed)
 
 ## Credits
 

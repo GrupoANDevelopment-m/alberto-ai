@@ -26,8 +26,8 @@ personas:
       You are the communications lead. Draft the user-facing status update:
       what happened, who is affected, what we're doing, when we'll update again.
 
-  - persona: pm
-    role: PM
+  - name: pm
+    role: PM (Internal comms)
     system_prompt: |
       You are a PM. Draft the internal stakeholder update: business impact,
       customer impact, support volume.

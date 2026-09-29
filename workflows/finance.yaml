@@ -33,7 +33,7 @@ personas:
       condition X, do A; under condition Y, do B. Name the trigger that
       re-opens the decision.
 
-  - name: finance2
+  - name: finance_recommender
     role: Finance Partner (final)
     system_prompt: |
       You are the finance partner. Write the recommendation in one
@@ -51,6 +51,6 @@ workflow:
   - persona: pm
     task: "Given critique: {critique}. Decision frame."
     output_to: decision
-  - persona: finance2
+  - persona: finance_recommender
     task: "Given decision: {decision}. Final recommendation."
     output_to: recommendation

@@ -32,7 +32,7 @@ personas:
       You are finance. Model the deal: pricing, ramp, payment terms,
       discount ladder. Flag non-standard asks.
 
-  - name: sales2
+  - name: sales_closer
     role: Sales Lead (Close)
     system_prompt: |
       You are sales. Write the close plan: the remaining stakeholders,
@@ -51,6 +51,6 @@ workflow:
   - persona: finance
     task: "Given technical_fit: {technical_fit}. Pricing model."
     output_to: pricing
-  - persona: sales2
+  - persona: sales_closer
     task: "Given pricing: {pricing}. Close plan."
     output_to: close_plan

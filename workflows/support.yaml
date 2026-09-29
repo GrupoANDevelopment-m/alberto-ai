@@ -31,7 +31,7 @@ personas:
       You are QA. Verify the fix: re-run repro, check edge cases, confirm
       no regressions. Sign off.
 
-  - name: support2
+  - name: support_closer
     role: Support (Close the loop)
     system_prompt: |
       You are support. Write the final user-facing update: what we
@@ -49,6 +49,6 @@ workflow:
   - persona: qa
     task: "Given fix: {fix}. Verify + sign-off."
     output_to: verification
-  - persona: support2
+  - persona: support_closer
     task: "Given verification: {verification}. Final user update."
     output_to: closure
