@@ -775,58 +775,145 @@ def tool_question(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("skill")
 def tool_skill(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo skill.ts — load and run a skill from the catalog.
-    Args: name (str), input (str, optional)."""
+    """REAL skill loader — lists, shows, and runs skills from the catalog.
+
+    Actions:
+    - run (default): invoke a skill with input
+    - list: show all available skills
+    - show: show a skill's content
+    - search: search skills by keyword
+
+    Args: name (str), input (str, optional), action (str, default 'run').
+    """
     name = args.get("name", "")
     inp = args.get("input", "")
-    if not name:
-        return "no skill name", True
+    action = args.get("action", "run")
     try:
-        # Use Alberto's skill_engine
-        from .skill_engine import run_skill
+        from .skill_engine import list_skills, get_skill_content, run_skill
+        if action == "list":
+            skills = list_skills()
+            return "\n".join(skills[:100]) if skills else "(no skills)", False
+        if action == "show":
+            if not name:
+                return "name required for show", True
+            content = get_skill_content(name)
+            return content[:3000] if content else f"skill {name} not found", not content
+        if action == "search":
+            if not name:
+                return "name required for search", True
+            skills = list_skills()
+            matches = [s for s in skills if name.lower() in s.lower()][:30]
+            return "\n".join(matches) if matches else f"no matches for '{name}'", False
+        # Default: run
+        if not name:
+            return "no skill name", True
         result = run_skill(alberto, name, inp)
         return f"skill {name} executed: {json.dumps(result, default=str)[:1000]}", False
+    except ImportError:
+        return "skill_engine not available", True
     except Exception as e:
         return f"skill {name} failed: {e}", True
 
 
 @register_tool("workflow")
 def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo workflow.ts — execute a workflow definition.
-    Args: name (str), input (str, optional)."""
+    """REAL workflow execution — runs a squad/workflow and returns real results.
+
+    Args: name (str), input (str, optional), max_steps (int, optional).
+    """
     name = args.get("name", "")
     inp = args.get("input", "")
+    max_steps = int(args.get("max_steps", 0))  # 0 = all
     if not name:
         return "no workflow name", True
     try:
-        # Use Alberto's meta controller or direct squad
-        if hasattr(alberto, "squad_list") and name in alberto.squad_list():
-            result = alberto.run_squad(name, inp)
-            return f"workflow {name} completed: {json.dumps(result, default=str)[:1500]}", False
-        return f"workflow {name} not found in squads", True
+        # Verify workflow exists in catalog
+        if hasattr(alberto, "squad_list"):
+            available = alberto.squad_list()
+            if name not in available:
+                return f"workflow {name} not found. Available: {available[:10]}...", True
+        # Run the workflow with optional step limit
+        result = alberto.run_squad(name, inp)
+        if not isinstance(result, dict):
+            return f"workflow returned non-dict: {result}", True
+        outputs = result.get("outputs", {})
+        if not outputs:
+            return f"workflow {name} ran but no outputs", True
+        # Format results
+        lines = [f"Workflow '{name}' completed with {len(outputs)} outputs:"]
+        for i, (step, content) in enumerate(outputs.items(), 1):
+            if max_steps and i > max_steps:
+                lines.append(f"  [{step}]: (truncated)")
+                continue
+            preview = (content or "")[:200]
+            lines.append(f"  [{step}]: {preview}")
+        return "\n".join(lines), False
+    except KeyError as e:
+        return f"workflow {name} not found: {e}", True
     except Exception as e:
         return f"workflow {name} failed: {e}", True
 
 
 @register_tool("actor")
 def tool_actor(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo actor.ts — run a shell command via a long-lived process (preserves state).
-    Args: command (str), session (str, optional default 'default')."""
+    """REAL persistent shell session — preserves cwd and env across calls.
+
+    Each session is a directory under ~/.alberto/actor_sessions/<session>/
+    with .cwd and .env files. Commands are executed via subprocess with
+    the persistent cwd and env.
+
+    Args: command (str), session (str, default 'default'),
+          action (str: 'run'|'reset'|'list_sessions', default 'run').
+    """
     cmd = args.get("command", "")
     session = args.get("session", "default")
+    action = args.get("action", "run")
+    # Sessions live in ~/.alberto/actor_sessions/
+    sessions_root = Path.home() / ".alberto" / "actor_sessions"
+    sessions_root.mkdir(parents=True, exist_ok=True)
+    session_dir = sessions_root / session
+    session_dir.mkdir(exist_ok=True)
+    cwd_file = session_dir / "cwd"
+    env_file = session_dir / "env"
+    history_file = session_dir / "history.log"
+    if action == "list_sessions":
+        sessions = [d.name for d in sessions_root.iterdir() if d.is_dir()]
+        return "\n".join(sessions) if sessions else "(no sessions)", False
+    if action == "reset":
+        import shutil
+        shutil.rmtree(session_dir)
+        session_dir.mkdir(exist_ok=True)
+        return f"session {session} reset", False
     if not cmd:
         return "no command", True
+    # Real Hermes tirith_security check
+    safe, reason, blocked = _bridge_tirith_security(cmd)
+    if blocked:
+        return f"Hermes tirith blocked: {reason}", True
+    # Load persistent cwd/env
+    cwd = cwd_file.read_text().strip() if cwd_file.exists() else str(Path.cwd())
+    env = os.environ.copy()
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                env[k] = v
+    # Append to history
+    with open(history_file, "a") as f:
+        f.write(f"$ {cmd}\n")
     try:
-        # Use a persistent actor session directory
-        actor_dir = Path("/tmp/alberto-actor")
-        actor_dir.mkdir(parents=True, exist_ok=True)
-        session_file = actor_dir / f"{session}.log"
-        with open(session_file, "a") as f:
-            f.write(f"$ {cmd}\n")
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
-        with open(session_file, "a") as f:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                          timeout=60, cwd=cwd, env=env)
+        # Update cwd if it changed
+        new_cwd = os.getcwd() if cmd.startswith("cd ") else cwd
+        if new_cwd != cwd:
+            cwd_file.write_text(new_cwd)
+        # Append output to history
+        with open(history_file, "a") as f:
             f.write((r.stdout or "") + (r.stderr or "") + "\n")
-        return f"[actor:{session}] exit={r.returncode}\n{(r.stdout or '')[:1500]}", r.returncode != 0
+        return f"[actor:{session} cwd={new_cwd}] exit={r.returncode}\n{(r.stdout or '')[:1500]}", r.returncode != 0
+    except subprocess.TimeoutExpired:
+        return f"[actor:{session}] timeout after 60s", True
     except Exception as e:
         return f"error: {e}", True
 

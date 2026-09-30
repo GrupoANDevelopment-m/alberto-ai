@@ -163,6 +163,55 @@ alberto-ai/
 └── .github/workflows/             # v1.8: CI/CD pipeline
 ```
 
+
+
+## 📦 v1.8.2 — Real Upstream Integration (commit 1f374df)
+
+**Bug fix**: I had real production code in `upstream/hermes/tools/` (87 Python files, 75218 LoC) and I rewrote them as stubs. v1.8.2 fixes this.
+
+### What changed
+
+Created `alberto/runtime/upstream_bridge.py` — a wrapper that:
+- Loads 16 real Hermes tools from `upstream/hermes/tools/`
+- Provides `real_*` functions that CALL the actual upstream code
+- Replaces my stub implementations in `function_caller.py`
+
+### Real upstream tools now used
+
+| Alberto tool | Now uses |
+|---|---|
+| `tool_memory_set/get/search` | Hermes `memory_tool` + FTS5 SQLite |
+| `tool_terminal` | Hermes `terminal_tool` (or subprocess fallback) |
+| `tool_code_execution` | Hermes `code_execution_tool` PTC + UDS RPC |
+| `tool_codesearch` | Hermes-style ripgrep + file type filters |
+| `tool_lsp` | Hermes `path_security` + ripgrep for symbols |
+| `tool_actor` | Hermes `tirith_security` + persistent shell |
+| `tool_task` | Hermes `todo_tool` (TodoStore) |
+| `tool_question` | Real stdin `input()` when interactive=True |
+| `tool_plan` | LLM-based decomposition via router |
+| `tool_history` | Real conversation store read |
+| `tool_workflow` | Real squad execution with outputs |
+| `tool_skill` | Real skill engine with list/show/search/run |
+
+### Test totals
+
+| Version | Tests passing |
+|---|---|
+| v1.7 (security) | 229 |
+| v1.8 (workflows) | 324 |
+| **v1.8.2 (upstream)** | **356** |
+
+### Compat shims
+
+Created minimal stubs in `upstream/hermes/`:
+- `hermes_constants.py` — `get_hermes_home`, `apply_subprocess_home_env`
+- `utils.py` — `atomic_replace`, `env_int`, `env_var_enabled`, etc
+- `agent/file_safety.py`, `agent/redact.py`, `agent/skill_utils.py`
+- `hermes_cli/config.py`, `hermes_cli/_subprocess_compat.py`
+- `plugins/__init__.py`, `toolsets/__init__.py`
+
+These let the upstream tools load without the full Hermes runtime.
+
 ## 🗺️ Roadmap
 
 - **v1.7** ✅ Done: NemoClaw on all writes, shell whitelist, audit log

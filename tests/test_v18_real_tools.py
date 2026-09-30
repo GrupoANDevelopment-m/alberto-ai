@@ -149,3 +149,57 @@ class TestToolLSP:
         })
         assert err  # Should be blocked
         assert "block" in out.lower() or "traversal" in out.lower()
+
+
+class TestToolActor:
+    """Real persistent shell actor."""
+
+    def test_run_echo(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["actor"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"command": "echo actor-test-98765", "session": "test"})
+        assert "actor-test-98765" in out
+        assert not err
+
+    def test_session_list(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["actor"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"action": "list_sessions"})
+        assert isinstance(out, str)
+        assert not err
+
+    def test_blocked_command(self):
+        """Hermes tirith should block dangerous commands."""
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["actor"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"command": "rm -rf /", "session": "dangerous"})
+        assert err
+        assert "block" in out.lower() or "tirith" in out.lower() or "dangerous" in out.lower()
+
+
+class TestToolWorkflow:
+    """Real workflow execution."""
+
+    def test_workflow_not_found(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["workflow"]
+        class FakeAlberto:
+            def squad_list(self):
+                return ["content", "engineering"]
+        out, err = fn(FakeAlberto(), {"name": "nonexistent_workflow"})
+        assert err
+
+
+class TestToolSkill:
+    """Real skill loader."""
+
+    def test_list_action(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["skill"]
+        class FakeAlberto: pass
+        # List doesn't require a name
+        out, err = fn(FakeAlberto(), {"action": "list"})
+        assert isinstance(out, str)
