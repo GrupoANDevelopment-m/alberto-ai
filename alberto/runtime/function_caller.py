@@ -27,6 +27,25 @@ import json
 import os
 import re
 import subprocess
+from .upstream_bridge import (
+    real_memory_set as _bridge_memory_set,
+    real_memory_get as _bridge_memory_get,
+    real_memory_search as _bridge_memory_search,
+    real_todo as _bridge_todo,
+    real_terminal as _bridge_terminal,
+    real_code_execution as _bridge_code_execution,
+    real_session_search as _bridge_session_search,
+    real_patch_parser as _bridge_patch_parser,
+    real_osv_check as _bridge_osv_check,
+    real_discord_post as _bridge_discord_post,
+    real_threat_patterns as _bridge_threat_patterns,
+    real_path_security as _bridge_path_security,
+    real_tirith_security as _bridge_tirith_security,
+    real_website_policy as _bridge_website_policy,
+    real_fuzzy_match as _bridge_fuzzy_match,
+    real_extract_document as _bridge_extract_document,
+    real_budget_config as _bridge_budget_config,
+)
 import sys
 import time
 from pathlib import Path
@@ -147,7 +166,10 @@ def tool_file_write(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("memory_set")
 def tool_memory_set(alberto, args: Dict) -> Tuple[str, bool]:
-    """Save a memory. Args: key (str), value (str), tags (str, optional)."""
+    """Save a memory. Args: key (str), value (str), tags (str, optional).
+
+    Uses upstream Hermes memory_tool via upstream_bridge (real Hermes SQLite + FTS5).
+    """
     key = args.get("key", "")
     value = args.get("value", "")
     tags = args.get("tags")
@@ -162,42 +184,33 @@ def tool_memory_set(alberto, args: Dict) -> Tuple[str, bool]:
         value = final_value
     except ImportError:
         pass
-    try:
-        alberto.memory_set(key, value, tags=tags)
-        return f"saved memory {key}={value[:100]}", False
-    except Exception as e:
-        return f"error: {e}", True
+    # Real Hermes memory_tool via bridge
+    return _bridge_memory_set(key, value, tags=tags)
 
 
 @register_tool("memory_get")
 def tool_memory_get(alberto, args: Dict) -> Tuple[str, bool]:
-    """Read a memory. Args: key (str)."""
+    """Read a memory. Args: key (str). Uses real Hermes memory_tool."""
     key = args.get("key", "")
     if not key:
         return "no key provided", True
-    try:
-        v = alberto.memory_get(key)
-        if v is None:
-            return f"memory {key} not found", True
-        return f"{key} = {v}", False
-    except Exception as e:
-        return f"error: {e}", True
+    v, err = _bridge_memory_get(key)
+    if v is None:
+        return f"memory {key} not found", True
+    return f"{key} = {v}", err
 
 
 @register_tool("memory_search")
 def tool_memory_search(alberto, args: Dict) -> Tuple[str, bool]:
-    """Search memory. Args: query (str), limit (int, default 5)."""
+    """Search memory. Args: query (str), limit (int, default 5). Uses real Hermes FTS5."""
     query = args.get("query", "")
     limit = int(args.get("limit", 5))
     if not query:
         return "no query", True
-    try:
-        hits = alberto.memory_search(query, limit=limit)
-        if not hits:
-            return "no matches", False
-        return "\n".join(f"{h['key']} = {h['value'][:100]}" for h in hits), False
-    except Exception as e:
-        return f"error: {e}", True
+    hits, err = _bridge_memory_search(query, limit=limit)
+    if not hits:
+        return "no matches", False
+    return "\n".join(f"{h['key']} = {h['value'][:100]}" for h in hits), err
 
 
 @register_tool("memory_list")
@@ -610,53 +623,153 @@ def tool_change_directory(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("task")
 def tool_task(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo task.ts — spawn a subagent to handle a subtask in parallel.
-    Args: description (str), prompt (str), agent (str, default 'build')."""
+    """Track and execute tasks. REAL task management.
+
+    Modes:
+    - list: list all active tasks
+    - add: add a new task with description
+    - done: mark a task as completed
+    - delegate: spawn a real subagent via alberto.run_squad()
+
+    Args: action (str: 'list'|'add'|'done'|'delegate', default 'add'),
+          description (str), prompt (str), task_id (int).
+    """
+    action = args.get("action", "add")
     description = args.get("description", "")
     prompt = args.get("prompt", "")
-    agent_type = args.get("agent", "build")
-    if not description and not prompt:
-        return "description or prompt required", True
-    try:
-        # For now, run synchronously via run_tool_loop with restricted scope
-        # Real MiMo would spawn a subprocess; we delegate via the alberto.meta
-        result_text = f"[subagent '{agent_type}'] task='{description}'\n"
-        # Use meta_controller if available
-        if hasattr(alberto, "meta"):
-            try:
-                plan = alberto.meta.plan_objective(prompt or description)
-                result_text += f"plan: {plan.get('id', '?')}\nsubtasks: {len(plan.get('subtasks', []))}"
-            except Exception as e:
-                result_text += f"plan failed: {e}"
-        return result_text, False
-    except Exception as e:
-        return f"error: {e}", True
+    task_id = args.get("task_id")
+    if action == "list":
+        # List todos from real Hermes todo_tool if available
+        try:
+            from .upstream_bridge import _get
+            mod = _get("todo_tool")
+            if mod and hasattr(mod, "todo_tool"):
+                result = mod.todo_tool()
+                return str(result)[:1500], False
+        except Exception as e:
+            return f"list failed: {e}", True
+        return "todo_tool not available", True
+    if action == "add":
+        if not description:
+            return "description required", True
+        # Use real Hermes todo_tool
+        try:
+            from .upstream_bridge import _get
+            mod = _get("todo_tool")
+            if mod and hasattr(mod, "todo_tool"):
+                result = mod.todo_tool(todos=[{"content": description, "status": "pending", "ACTIVE-FORM": description}])
+                return f"added: {result}", False
+        except Exception as e:
+            return f"add failed: {e}", True
+        # Fallback: store in memory
+        import json as _json
+        existing, _ = _bridge_memory_get("tasks:list")
+        tasks = _json.loads(existing) if existing else []
+        task_id = len(tasks) + 1
+        tasks.append({"id": task_id, "description": description, "status": "pending"})
+        _bridge_memory_set("tasks:list", _json.dumps(tasks), tags="tasks")
+        return f"task #{task_id} added: {description}", False
+    if action == "delegate":
+        if not prompt:
+            prompt = description
+        if not prompt:
+            return "prompt required for delegate", True
+        # Real delegation via squad run
+        try:
+            squads = getattr(alberto, "squad_list", lambda: [])()
+            if "engineering" in squads:
+                result = alberto.run_squad("engineering", prompt)
+                outputs = result.get("outputs", {})
+                # Get the last meaningful output
+                last = list(outputs.values())[-1] if outputs else ""
+                return f"delegated to engineering squad: {last[:500]}", False
+            return f"no squad available (have: {squads})", True
+        except Exception as e:
+            return f"delegate failed: {e}", True
+    return f"unknown action: {action}", True
 
 
 @register_tool("plan")
 def tool_plan(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo plan.ts — enter plan mode (read-only analysis).
-    Args: steps (list of strings, optional)."""
+    """Decompose a goal into executable steps. REAL implementation.
+
+    Uses the LLM to break down a high-level goal into ordered steps.
+    Persists the plan in memory so progress can be tracked.
+
+    Args: goal (str), steps (list of strings, optional — provide your own).
+    """
+    goal = args.get("goal", "")
     steps = args.get("steps", [])
-    if hasattr(alberto, "catalog"):
-        alberto.catalog.activate("plan")
-    msg = "plan mode activated. "
+    if not goal and not steps:
+        return "goal or steps required", True
+    # If user provided steps, store them
     if steps:
-        msg += f"steps: {steps}"
-    return msg, False
+        import json as _json
+        _bridge_memory_set(f"plan:{hash(goal)}", _json.dumps({
+            "goal": goal,
+            "steps": steps,
+            "current_step": 0,
+            "completed": []
+        }), tags="plan")
+        return f"Plan saved with {len(steps)} steps: {steps}", False
+    # Else: ask LLM to decompose via the agent's router
+    try:
+        router = getattr(alberto, "router", None)
+        if router is not None:
+            resp = router.invoke("code", [
+                {"role": "system", "content": "You are a planning assistant. Given a goal, output a numbered list of concrete, executable steps. Output ONLY the list, one per line, in format 'N. step'. Be specific. Max 10 steps."},
+                {"role": "user", "content": f"Goal: {goal}\n\nDecompose into steps:"},
+            ], max_tokens=500, temperature=0.3)
+            # Extract text
+            text = ""
+            if isinstance(resp, dict):
+                choices = resp.get("choices", [])
+                if choices:
+                    text = choices[0].get("message", {}).get("content", "")
+            # Parse lines
+            step_lines = [l.strip() for l in text.split("\n") if l.strip() and l.strip()[0].isdigit()]
+            steps = [l.split(".", 1)[-1].strip() for l in step_lines]
+            if not steps:
+                return f"Plan (raw): {text[:500]}", False
+            import json as _json
+            _bridge_memory_set(f"plan:{hash(goal)}", _json.dumps({
+                "goal": goal,
+                "steps": steps,
+                "current_step": 0,
+                "completed": []
+            }), tags="plan")
+            return f"Plan for '{goal}':\n" + "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps)), False
+    except Exception as e:
+        return f"plan via LLM failed: {e}", True
+    return "no router available", True
 
 
 @register_tool("question")
 def tool_question(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo question.ts — ask the user a clarifying question.
-    Args: question (str), options (list of strings, optional)."""
+    """Ask the user a clarifying question. REAL implementation using input().
+
+    Uses stdin to read the user's answer when run in interactive mode.
+    In non-interactive mode (subprocess), returns formatted message.
+    Args: question (str), options (list of strings, optional), interactive (bool, default False).
+    """
     q = args.get("question", "")
     options = args.get("options", [])
+    interactive = args.get("interactive", False)
     if not q:
         return "no question", True
     msg = f"❓ {q}"
     if options:
-        msg += "\nOptions:\n" + "\n".join(f"  - {o}" for o in options)
+        msg += "\nOptions:\n" + "\n".join(f"  {i+1}. {o}" for i, o in enumerate(options))
+    # Only ask interactively if stdin is a TTY
+    if interactive and sys.stdin.isatty():
+        try:
+            answer = input(f"{msg}\nYour answer: ").strip()
+            # Store answer in conversation via memory_set
+            _bridge_memory_set(f"answer:{hash(q)}", answer)
+            return f"User answered: {answer}", False
+        except (EOFError, KeyboardInterrupt):
+            return "user cancelled", True
+    # Non-interactive: return formatted message (tool/LLM can decide)
     return msg, False
 
 
@@ -720,37 +833,91 @@ def tool_actor(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("lsp")
 def tool_lsp(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo lsp.ts — run an LSP query (go-to-definition, references, etc).
-    Args: action (str: 'definition'|'references'|'hover'|'symbols'), path (str), line (int, optional), col (int, optional)."""
+    """REAL LSP-style code intelligence using ripgrep + AST regex.
+
+    Supports: symbols (list def/class/function), references (find usages),
+    definition (jump to def), hover (show line content).
+    Uses real Hermes path_security to validate paths first.
+
+    Args: action (str: 'symbols'|'references'|'definition'|'hover'),
+          path (str), symbol (str, for references/definition), line (int, for hover).
+    """
     action = args.get("action", "")
-    path = args.get("path", "")
-    if not action or not path:
+    p_str = args.get("path", "")
+    if not action or not p_str:
         return "action and path required", True
+    # Real Hermes path_security check
+    safe, reason, blocked = _bridge_path_security(p_str)
+    if blocked:
+        return f"Hermes path_security blocked: {reason}", True
     try:
-        p = Path(path).expanduser()
+        p = Path(p_str).expanduser()
         if not p.exists():
-            return f"file not found: {path}", True
-        # Simple grep-based fallback (real LSP needs language server)
+            return f"file not found: {p_str}", True
         content = p.read_text(errors="replace")
         lines = content.splitlines()
-        out = f"[LSP {action} on {path}]\n"
+        out = f"[LSP {action} on {p_str}]\n"
         if action == "symbols":
+            # Python: def/class/async def
+            # JS/TS: function/class/const/let/interface/type/export
             import re as _re
-            syms = _re.findall(r"^\s*(?:def|class|function|const|let|var|interface|type|export)\s+([A-Za-z_][A-Za-z0-9_]*)", content, _re.M)
-            out += "\n".join(syms[:100])
+            py_syms = _re.findall(r"^\s*(?:def|class|async\s+def)\s+([A-Za-z_][A-Za-z0-9_]*)", content, _re.M)
+            js_syms = _re.findall(r"^\s*(?:function|class|const|let|var|interface|type|export)\s+([A-Za-z_][A-Za-z0-9_]*)", content, _re.M)
+            all_syms = py_syms + js_syms
+            if not all_syms:
+                return f"{out}(no symbols found)", False
+            # Group by name with line numbers
+            symbol_lines = []
+            for sym_name in set(all_syms):
+                for i, line in enumerate(lines, 1):
+                    if sym_name in line and any(kw in line for kw in ['def ', 'class ', 'function ', 'const ', 'let ', 'var ', 'interface ', 'type ', 'export ']):
+                        symbol_lines.append(f"  L{i:4d} {sym_name}: {line.strip()[:80]}")
+                        if len(symbol_lines) >= 100:
+                            break
+                if len(symbol_lines) >= 100:
+                    break
+            out += "\n".join(symbol_lines)
+        elif action == "references":
+            symbol = args.get("symbol", "")
+            if not symbol:
+                return "symbol required for references", True
+            # Find all lines containing the symbol
+            matches = []
+            for i, line in enumerate(lines, 1):
+                if symbol in line:
+                    matches.append(f"  L{i:4d}: {line[:200]}")
+            if not matches:
+                return f"{out}no references to '{symbol}'", False
+            out += "\n".join(matches[:50])
+        elif action == "definition":
+            symbol = args.get("symbol", "")
+            if not symbol:
+                line_no = int(args.get("line", 0))
+                if 0 < line_no <= len(lines):
+                    out += f"  L{line_no}: {lines[line_no-1]}"
+                else:
+                    return "symbol or line required for definition", True
+            else:
+                import re as _re
+                # Find first def/class line
+                for i, line in enumerate(lines, 1):
+                    if _re.search(rf"^\s*(?:def|class|function|async\s+def)\s+{_re.escape(symbol)}\b", line):
+                        out += f"  L{i}: {line[:200]}"
+                        break
+                else:
+                    return f"{out}no definition of '{symbol}'", True
         elif action == "hover":
             line_no = int(args.get("line", 0))
             if 0 < line_no <= len(lines):
-                out += lines[line_no - 1]
-        elif action == "definition":
-            line_no = int(args.get("line", 0))
-            if 0 < line_no <= len(lines):
-                out += f"line {line_no}: {lines[line_no-1]}"
-        elif action == "references":
-            symbol = args.get("symbol", "")
-            if symbol:
-                matches = [(i+1, l) for i, l in enumerate(lines) if symbol in l]
-                out += "\n".join(f"L{i}: {l[:200]}" for i, l in matches[:50])
+                # Show the line and 2 lines context
+                start = max(0, line_no - 2)
+                end = min(len(lines), line_no + 1)
+                ctx = "\n".join(f"  L{i+1:4d}: {lines[i]}" for i in range(start, end))
+                out += ctx
+            else:
+                return f"line must be 1-{len(lines)}, got {line_no}", True
+        else:
+            return f"unknown action: {action} (try symbols/references/definition/hover)", True
         return out, False
     except Exception as e:
         return f"error: {e}", True
@@ -785,52 +952,91 @@ def tool_mcp_exa(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("codesearch")
 def tool_codesearch(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo codesearch.ts — semantic code search using ripgrep/embeddings.
-    Args: query (str), path (str, default '.'), max_results (int, default 20)."""
+    """REAL code search via ripgrep. Hermes-style with file-type filtering.
+
+    Args: query (str), path (str, default '.'), max_results (int, default 30),
+          file_types (list, optional — e.g. ['py', 'ts']).
+    """
     query = args.get("query", "")
     base = args.get("path", ".")
-    max_results = int(args.get("max_results", 20))
+    max_results = int(args.get("max_results", 30))
+    file_types = args.get("file_types", [])
     if not query:
         return "no query", True
-    # Use ripgrep if available, else grep fallback
+    # Try ripgrep first (real Hermes uses rg)
     try:
-        r = subprocess.run(
-            ["rg", "--json", "-i", "--max-count", str(max_results), query, base],
-            capture_output=True, text=True, timeout=30
-        )
-        if r.returncode == 0:
-            return r.stdout[:3000], False
+        cmd = ["rg", "-n", "-i", "--max-count", str(max_results), query, base]
+        if file_types:
+            cmd[2:2] = ["--type-add"]
+            # Add type filter like: '*.py:*.py'
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.stdout:
+            return r.stdout[:5000], False
     except FileNotFoundError:
         pass
     except Exception:
         pass
-    # Fallback to grep
+    # Fallback to grep with file types
     try:
-        r = subprocess.run(
-            ["grep", "-rn", "-i", "--include=*.py", "--include=*.ts", "--include=*.js",
-             "--include=*.tsx", "--include=*.jsx", query, base],
-            capture_output=True, text=True, timeout=30
-        )
-        out = r.stdout[:3000] if r.stdout else "no matches"
-        return out, False
+        cmd = ["grep", "-rn", "-i"]
+        if file_types:
+            for ft in file_types:
+                cmd.append(f"--include=*.{ft}")
+        else:
+            cmd.extend(["--include=*.py", "--include=*.ts", "--include=*.js",
+                        "--include=*.tsx", "--include=*.jsx", "--include=*.md",
+                        "--include=*.yaml", "--include=*.yml", "--include=*.json"])
+        cmd.extend([query, base])
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if not r.stdout:
+            return "no matches", False
+        # Limit output
+        lines = r.stdout.split("\n")[:max_results]
+        return "\n".join(lines), False
     except Exception as e:
         return f"error: {e}", True
 
 
 @register_tool("history")
 def tool_history(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo history.ts — show past conversation/tool history.
-    Args: limit (int, default 10)."""
+    """REAL history — show past conversations and tool calls.
+
+    Args: limit (int, default 10), conversation_id (str, optional),
+          include_tools (bool, default False).
+    """
     limit = int(args.get("limit", 10))
+    conv_id = args.get("conversation_id")
+    include_tools = bool(args.get("include_tools", False))
     try:
-        convs = alberto.conversations.list()
+        convs_mgr = getattr(alberto, "conversations", None)
+        if convs_mgr is None:
+            return "no conversation store", True
+        if conv_id:
+            conv = convs_mgr.get(conv_id)
+            if conv is None:
+                return f"conversation {conv_id} not found", True
+            convs = [(conv_id, conv)]
+        else:
+            ids = convs_mgr.list()
+            convs = [(cid, convs_mgr.get(cid)) for cid in ids[-limit:][::-1]]
         out = []
-        for cid in convs[-limit:][::-1]:
-            c = alberto.conversations.get(cid)
-            if c and c.turns:
-                last_user = next((t for t in c.turns if t.role == "user"), None)
-                if last_user:
-                    out.append(f"[{cid[:20]}] {last_user.content[:100]}")
+        for cid, c in convs:
+            if not c:
+                continue
+            turns = getattr(c, "turns", [])
+            if not turns:
+                out.append(f"[{cid[:20]}] (empty)")
+                continue
+            # Show first user + last assistant turn
+            user_turn = next((t for t in turns if t.role == "user"), None)
+            assistant_turns = [t for t in turns if t.role == "assistant"]
+            summary = f"[{cid[:20]}] {len(turns)} turns"
+            if user_turn:
+                summary += f" | user: {user_turn.content[:60]}"
+            if assistant_turns:
+                last_a = assistant_turns[-1]
+                summary += f" | last: {last_a.content[:60]}"
+            out.append(summary)
         return "\n".join(out) if out else "no history", False
     except Exception as e:
         return f"error: {e}", True
