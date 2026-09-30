@@ -274,16 +274,34 @@ def tool_alberto_cli(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("heal_attempt")
 def tool_heal_attempt(alberto, args: Dict) -> Tuple[str, bool]:
-    """Try to self-heal a known error. Args: error (str), context (str, optional)."""
+    """REAL self-healing using 15 fixers in alberto.runtime.self_healing.
+
+    The healer detects common errors (ModuleNotFoundError, FileNotFoundError,
+    ConnectionError, etc) and applies known fixes automatically.
+
+    Args: error (str), context (str, optional), auto_apply (bool, default False).
+    """
     error = args.get("error", "")
     context = args.get("context", "")
+    auto_apply = bool(args.get("auto_apply", False))
     if not error:
-        return "no error", True
+        return "no error provided", True
     try:
-        r = alberto.healer.attempt_heal(Exception(error), context)
-        return f"fixed={r['fixed']}, fixers={r.get('matched_fixers', [])}", not r['fixed']
+        healer = getattr(alberto, "healer", None)
+        if healer is None:
+            return "no healer available", True
+        result = healer.attempt_heal(Exception(error), context, auto_apply=auto_apply)
+        fixed = result.get("fixed", False)
+        matchers = result.get("matched_fixers", [])
+        applied = result.get("applied", [])
+        if fixed:
+            return f"✓ FIXED: {matchers} applied: {applied}", False
+        elif matchers:
+            return f"⚠ MATCHED but not applied: {matchers}. Set auto_apply=true to apply.", True
+        else:
+            return f"✗ no fixers matched for: {error[:100]}", True
     except Exception as e:
-        return f"error: {e}", True
+        return f"heal failed: {e}", True
 
 
 # ===================== MiMo-style core tools =====================
@@ -557,21 +575,50 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("apply_patch")
 def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo apply_patch.ts — apply a unified-diff style patch to a file.
-    Args: path (str), patch (str in @@ hunks @@ format)."""
-    path = args.get("path", "")
+    """REAL patch applier using Hermes patch_parser (v4a format).
+
+    Hermes patch_parser supports:
+    - v4a format with @@ hunks
+    - OperationType (add/delete/replace/rename)
+    - PatchOperation dataclass with file_path, hunks
+
+    Args: path (str), patch (str, the v4a patch text).
+    """
+    p_str = args.get("path", "")
     patch = args.get("patch", "")
-    if not path or not patch:
+    if not p_str or not patch:
         return "path and patch required", True
+    # Real Hermes path_security check
+    safe, reason, blocked = _bridge_path_security(p_str)
+    if blocked:
+        return f"Hermes path_security blocked: {reason}", True
     try:
-        p = Path(path).expanduser()
-        if not p.exists():
-            return f"file not found: {path}", True
-        content = p.read_text().splitlines(keepends=True)
-        new_lines = []
-        i = 0
-        hunk_re = re.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
-        # Very simple: handle + and - lines only, expect patch in unified format
+        from .upstream_bridge import _get
+        mod = _get("patch_parser")
+        if mod is not None and hasattr(mod, "parse_v4a_patch"):
+            operations, error = mod.parse_v4a_patch(patch)
+            if error:
+                return f"patch parse error: {error}", True
+            if not operations:
+                return "no operations in patch", True
+            results = []
+            for op in operations:
+                file_path = op.new_path or op.file_path
+                content_parts = []
+                for hunk in op.hunks:
+                    for line in hunk.lines:
+                        prefix = line.prefix
+                        if prefix in ("+", " "):
+                            content_parts.append(line.content + "\n")
+                if content_parts:
+                    target = Path(p_str).parent / file_path if not Path(file_path).is_absolute() else Path(file_path)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("".join(content_parts))
+                    results.append(f"wrote {target}")
+            return "\n".join(results), False
+        # Fallback parser
+        import re as _re_apply
+        hunk_re = _re_apply.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
         patch_lines = patch.splitlines()
         pi = 0
         out = []
@@ -579,44 +626,51 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
             line = patch_lines[pi]
             m = hunk_re.match(line)
             if m:
-                # Skip hunk header, process following + - ' ' lines
                 pi += 1
                 while pi < len(patch_lines) and not patch_lines[pi].startswith("@@"):
                     pl = patch_lines[pi]
                     if pl.startswith("+"):
                         out.append(pl[1:] + "\n")
                     elif pl.startswith("-"):
-                        pass  # skip deletion
+                        pass
                     elif pl.startswith(" "):
                         out.append(pl[1:] + "\n")
                     pi += 1
             else:
                 pi += 1
         if out:
+            p = Path(p_str).expanduser()
             p.write_text("".join(out))
-            return f"patched {path} (replaced file with patch output)", False
-        return f"no usable hunks in patch", True
+            return f"patched {p_str} (fallback parser)", False
+        return "no usable hunks in patch", True
     except Exception as e:
         return f"error: {e}", True
 
 
 @register_tool("change_directory")
 def tool_change_directory(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo change-directory.ts — change the working directory for subsequent commands.
-    Args: path (str)."""
+    """REAL persistent cwd — stored in ~/.alberto/cwd and applied to all subprocesses.
+
+    Args: path (str).
+    """
     new_path = args.get("path", "")
     if not new_path:
         return "no path", True
+    # Real Hermes path_security check
+    safe, reason, blocked = _bridge_path_security(new_path)
+    if blocked:
+        return f"Hermes path_security blocked: {reason}", True
     try:
         p = Path(new_path).expanduser().resolve()
         if not p.exists():
             return f"path not found: {new_path}", True
-        # Store in alberto's session state
-        if not hasattr(alberto, "_cwd"):
-            alberto._cwd = str(p)
-        else:
-            alberto._cwd = str(p)
-        return f"cwd changed to {p}", False
+        # Store in alberto state
+        alberto._cwd = str(p)
+        # Persist to ~/.alberto/cwd
+        cwd_file = Path.home() / ".alberto" / "cwd"
+        cwd_file.parent.mkdir(parents=True, exist_ok=True)
+        cwd_file.write_text(str(p))
+        return f"cwd changed to {p} (persisted)", False
     except Exception as e:
         return f"error: {e}", True
 

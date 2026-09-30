@@ -203,3 +203,78 @@ class TestToolSkill:
         # List doesn't require a name
         out, err = fn(FakeAlberto(), {"action": "list"})
         assert isinstance(out, str)
+
+
+class TestToolApplyPatch:
+    """Real patch applier."""
+
+    def test_simple_addition(self):
+        import os
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["apply_patch"]
+        class FakeAlberto: pass
+        # Create a temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("line1\nline2\nline3\n")
+            fp = f.name
+        try:
+            # Hermes v4a format requires *** Begin Patch *** wrapper
+            patch = "*** Begin Patch\n*** Update File: " + os.path.basename(fp) + "\n@@\n line1\n+inserted\n line2\n line3\n*** End Patch"
+            out, err = fn(FakeAlberto(), {"path": fp, "patch": patch})
+            # Should succeed (real Hermes v4a)
+            content = Path(fp).read_text()
+            assert "inserted" in content, f"Expected 'inserted' in: {content!r}"
+        finally:
+            os.unlink(fp)
+
+    def test_blocked_path(self):
+        """Traversed path is blocked."""
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["apply_patch"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"path": "../../etc/passwd", "patch": "@@ -1,1 +1,1 @@\\n-old\\n+new"})
+        assert err
+        assert "block" in out.lower() or "traversal" in out.lower()
+
+
+class TestToolChangeDirectory:
+    """Real persistent cwd."""
+
+    def test_pwd(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["change_directory"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"path": "/tmp"})
+        assert not err
+        assert "/tmp" in out
+
+    def test_blocked_path(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["change_directory"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {"path": "../../etc"})
+        assert err
+
+
+class TestToolHealAttempt:
+    """Real self-healing."""
+
+    def test_no_error(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["heal_attempt"]
+        class FakeAlberto: pass
+        out, err = fn(FakeAlberto(), {})
+        assert err
+
+    def test_unknown_error(self):
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        fn = TOOL_REGISTRY["heal_attempt"]
+        # Mock alberto with healer
+        class FakeHealer:
+            def attempt_heal(self, exc, context, auto_apply=False):
+                return {"fixed": False, "matched_fixers": [], "applied": []}
+        class FakeAlberto:
+            healer = FakeHealer()
+        out, err = fn(FakeAlberto(), {"error": "SomeRandomError: nothing matched"})
+        assert err
