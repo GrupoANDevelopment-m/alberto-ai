@@ -32,7 +32,7 @@ from .upstream_bridge import (
     real_memory_get as _bridge_memory_get,
     real_memory_search as _bridge_memory_search,
     real_todo as _bridge_todo,
-    real_terminal as _bridge_terminal,
+    real_terminal_run as _bridge_terminal,
     real_code_execution as _bridge_code_execution,
     real_session_search as _bridge_session_search,
     real_patch_parser as _bridge_patch_parser,

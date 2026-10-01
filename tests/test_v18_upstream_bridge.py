@@ -18,10 +18,9 @@ class TestUpstreamBridgeModuleLoading:
         from alberto.runtime.upstream_bridge import get_bridge_status
         status = get_bridge_status()
         assert status["total"] >= 15
-        assert status["loaded_count"] >= 15
-        # Each loaded module should be OK
-        for name, state in status["modules"].items():
-            assert state == "OK", f"{name} failed to load"
+        assert status["model_tools_loaded"] is True
+        # Each tool discovered should have a name
+        assert len(status["tool_names"]) >= 15
 
 
 class TestRealMemoryTools:
@@ -86,14 +85,14 @@ class TestRealTerminal:
     """Real Hermes terminal_tool (or subprocess fallback)."""
 
     def test_run_echo(self):
-        from alberto.runtime.upstream_bridge import real_terminal
-        out, err = real_terminal("echo bridge-test-12345")
+        from alberto.runtime.upstream_bridge import real_terminal_run
+        out, err = real_terminal_run("echo bridge-test-12345")
         assert "bridge-test-12345" in out
         assert not err
 
     def test_run_with_error(self):
-        from alberto.runtime.upstream_bridge import real_terminal
-        out, err = real_terminal("false")  # exit code 1
+        from alberto.runtime.upstream_bridge import real_terminal_run
+        out, err = real_terminal_run("false")  # exit code 1
         assert err  # is_error=True because returncode != 0
 
 
