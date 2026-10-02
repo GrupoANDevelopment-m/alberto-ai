@@ -212,6 +212,62 @@ Created minimal stubs in `upstream/hermes/`:
 
 These let the upstream tools load without the full Hermes runtime.
 
+
+
+## 📦 v1.8.3 — 25 Real Hermes Tools via model_tools.py (commit 4ff7a34)
+
+Major upgrade: now using **REAL NousResearch hermes-agent** code via `model_tools.py`.
+
+### What changed
+
+- `upstream/hermes/model_tools.py` (996 LoC, real upstream) is now loaded
+- `upstream/hermes/toolsets.py` (492 LoC, real) - toolset definitions
+- `upstream/hermes/tools/arg_coercion.py` (real) - LLM arg coercion
+- `alberto/runtime/upstream_bridge.py` rewritten with `handle_hermes_tool_call()`
+- Compat shims in `upstream/hermes/{cron,plugins,toolsets,websockets}/`
+
+### 25 production Hermes tools now real
+
+| Tool | What |
+|---|---|
+| `terminal` | Real shell with NemoClaw security |
+| `read_file` | Read with line numbers + safety check |
+| `write_file` | Atomic write + lint check |
+| `patch` | Find-and-replace edits |
+| `search_files` | ripgrep content search |
+| `browser_navigate/click/snapshot/type/scroll/press/console` | Real browser automation |
+| `memory` | SQLite + FTS5 (with agent-loop interception) |
+| `todo` | Real TodoStore |
+| `skills_list/skill_view/skill_manage` | Real skills catalog |
+| `clarify` | Real user question (when interactive) |
+| `process`, `project_create/list/switch` | Background process + Projects |
+
+Test totals: 324 → 379 → 396 passing
+
+### n8n templates included (v1.8.3+)
+
+For Discord/Telegram/Slack/Voice/Image integration without code:
+
+```
+n8n_flows/
+├── README.md              ← 5-min setup guide
+├── discord/ai-router.json
+├── telegram/voice-assistant.json
+├── slack/ai-bot.json
+├── image_gen/nvidia-flux.json
+└── voice/openai-tts.json
+```
+
+All templates work with **your** bot tokens. No mock, no stub. User imports the .json, adds credentials, activates. Real bot in 5 min.
+
+### AIOX honest status
+
+`upstream/aiox/README.md` documents the truth:
+- AIOX upstream = 21 YAMLs + docs, **0 Python files**
+- `@aiox/cli` does NOT exist on npm
+- Alberto uses 15 own workflows + 25 Hermes tools instead
+- Future options: DeerFlow, CrewAI, LangGraph, Agno
+
 ## 🗺️ Roadmap
 
 - **v1.7** ✅ Done: NemoClaw on all writes, shell whitelist, audit log
