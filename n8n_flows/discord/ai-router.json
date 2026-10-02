@@ -1,0 +1,81 @@
+{
+  "name": "Discord AI Bot (Alberto ready)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "discord-alberto",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook1",
+      "name": "Discord Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Categorize Discord message and route to right department\nconst msg = $input.item.json.body.content;\nlet category = 'general';\nlet department = 'general-support';\n\nif (msg.toLowerCase().includes('urgent') || msg.toLowerCase().includes('error') || msg.toLowerCase().includes('broken')) {\n  category = 'urgent';\n  department = 'it-support';\n} else if (msg.toLowerCase().includes('success') || msg.toLowerCase().includes('thanks') || msg.toLowerCase().includes('love')) {\n  category = 'success-story';\n  department = 'customer-success';\n} else if (msg.includes('?')) {\n  category = 'question';\n  department = 'customer-support';\n}\n\nreturn {\n  json: {\n    original_message: msg,\n    category: category,\n    department: department,\n    user: $input.item.json.body.author.username,\n    channel: $input.item.json.body.channel_id,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "categorize1",
+      "name": "Categorize Message",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.category}}",
+              "operation": "equals",
+              "value2": "urgent"
+            }
+          ]
+        }
+      },
+      "id": "if1",
+      "name": "Is Urgent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://discord.com/api/v10/channels/{{$json.channel}}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "discordApi",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"content\": \"🚨 URGENT: Routed to IT support. Ticket #{{$json.timestamp}}\"}"
+      },
+      "id": "discord1",
+      "name": "Reply on Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 200]
+    }
+  ],
+  "connections": {
+    "Discord Webhook": {
+      "main": [[{"node": "Categorize Message", "type": "main", "index": 0}]]
+    },
+    "Categorize Message": {
+      "main": [[{"node": "Is Urgent?", "type": "main", "index": 0}]]
+    },
+    "Is Urgent?": {
+      "main": [[{"node": "Reply on Discord", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {"name": "discord"},
+    {"name": "alberto"}
+  ]
+}

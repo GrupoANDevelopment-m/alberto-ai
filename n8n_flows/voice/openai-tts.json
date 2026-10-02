@@ -1,0 +1,56 @@
+{
+  "name": "TTS via OpenAI (Alberto ready)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tts",
+        "responseMode": "responseNode"
+      },
+      "id": "tts_trigger",
+      "name": "TTS Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/speech",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"tts-1\", \"input\": \"{{$json.body.text}}\", \"voice\": \"alloy\"}",
+        "options": {"response": {"responseFormat": "file"}}
+      },
+      "id": "openai_tts",
+      "name": "OpenAI TTS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "options": {
+          "response": {
+            "responseCode": 200,
+            "responseHeaders": {"entries": [{"name": "Content-Type", "value": "audio/mpeg"}]}
+          }
+        }
+      },
+      "id": "respond_tts",
+      "name": "Respond with Audio",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "TTS Webhook": {"main": [[{"node": "OpenAI TTS", "type": "main", "index": 0}]]},
+    "OpenAI TTS": {"main": [[{"node": "Respond with Audio", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "tags": [{"name": "tts"}, {"name": "alberto"}]
+}

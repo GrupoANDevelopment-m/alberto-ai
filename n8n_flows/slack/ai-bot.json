@@ -1,0 +1,52 @@
+{
+  "name": "Slack AI Bot with RAG (Alberto ready)",
+  "nodes": [
+    {
+      "parameters": {
+        "channel": "#alberto",
+        "additionalFields": {}
+      },
+      "id": "slack_trigger",
+      "name": "Slack Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"gpt-4\", \"messages\": [{\"role\": \"system\", \"content\": \"You are Alberto, a Slack AI assistant. Be concise.\"}, {\"role\": \"user\", \"content\": \"{{$json.text}}\"}], \"max_tokens\": 500}",
+        "options": {}
+      },
+      "id": "gpt_slack",
+      "name": "GPT-4 Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json.channel}}",
+        "text": "={{$json.choices[0].message.content}}",
+        "otherOptions": {"as_user": false, "icon_emoji": ":robot_face:"}
+      },
+      "id": "slack_reply",
+      "name": "Reply on Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Slack Trigger": {"main": [[{"node": "GPT-4 Reply", "type": "main", "index": 0}]]},
+    "GPT-4 Reply": {"main": [[{"node": "Reply on Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "tags": [{"name": "slack"}, {"name": "alberto"}]
+}

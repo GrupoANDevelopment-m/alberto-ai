@@ -1,0 +1,57 @@
+{
+  "name": "Image Gen via NVIDIA Flux (Alberto ready)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "image-gen",
+        "responseMode": "responseNode"
+      },
+      "id": "trigger1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{$credentials.nvidiaApiKey}}"},
+            {"name": "Accept", "value": "application/json"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"prompt\": \"{{$json.body.prompt}}\", \"width\": 1024, \"height\": 1024, \"steps\": 30}",
+        "options": {}
+      },
+      "id": "flux1",
+      "name": "NVIDIA Flux API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "options": {"response": {"responseCode": 200, "responseData": "={{$json}}"}}
+      },
+      "id": "respond1",
+      "name": "Respond with Image",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {"main": [[{"node": "NVIDIA Flux API", "type": "main", "index": 0}]]},
+    "NVIDIA Flux API": {"main": [[{"node": "Respond with Image", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "tags": [{"name": "image"}, {"name": "alberto"}]
+}
