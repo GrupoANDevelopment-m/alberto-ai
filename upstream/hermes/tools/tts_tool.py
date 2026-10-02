@@ -206,7 +206,7 @@ GEMINI_TTS_SAMPLE_WIDTH = 2  # 16-bit PCM (L16)
 
 def _get_default_output_dir() -> str:
     from hermes_constants import get_hermes_dir
-    return str(get_hermes_dir("cache/audio", "audio_cache"))
+    return str(get_hermes_dir())
 
 DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 
@@ -1906,7 +1906,7 @@ def _get_piper_voices_dir() -> Path:
     HERMES_HOME so voice downloads follow profile boundaries.
     """
     from hermes_constants import get_hermes_dir
-    root = Path(get_hermes_dir("cache/piper-voices", "piper_voices_cache"))
+    root = Path(get_hermes_dir())
     root.mkdir(parents=True, exist_ok=True)
     return root
 

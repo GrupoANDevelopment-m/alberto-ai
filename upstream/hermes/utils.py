@@ -45,3 +45,15 @@ def env_float(name: str, default: float = 0.0) -> float:
         return float(os.environ.get(name, str(default)))
     except (ValueError, TypeError):
         return default
+
+def file_signature(path):
+    import hashlib
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        return None
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+def base_url_hostname(url):
+    from urllib.parse import urlparse
+    return urlparse(url).hostname or ""

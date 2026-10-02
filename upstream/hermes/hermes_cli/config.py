@@ -14,3 +14,5 @@ def get_hermes_home():
     import os
     from pathlib import Path
     return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+
+DEFAULT_CONFIG = {}

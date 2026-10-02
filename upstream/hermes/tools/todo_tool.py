@@ -323,3 +323,6 @@ registry.register(
     check_fn=check_todo_requirements,
     emoji="📋",
 )
+
+# Compat
+TODO_LEGACY_ALIASES = {}

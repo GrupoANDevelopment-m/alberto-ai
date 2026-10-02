@@ -587,3 +587,15 @@ def tool_result(data=None, **kwargs) -> str:
     if data is not None:
         return json.dumps(data, ensure_ascii=False)
     return json.dumps(kwargs, ensure_ascii=False)
+
+# Compat: this is what newer Hermes uses
+CHECK_FN_CACHE_BYPASS = False
+
+def check_fn_cache_scope():
+    return None
+
+_MAX_TOOL_ERROR_CHARS = 5000
+_TOOL_REGISTRY = {}
+
+def get_all_tool_names():
+    return list(_TOOL_REGISTRY.keys()) if _TOOL_REGISTRY else []

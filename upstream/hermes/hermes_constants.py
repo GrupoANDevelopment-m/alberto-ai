@@ -23,3 +23,6 @@ def apply_subprocess_home_env(env=None):
     if env is None:
         env = os.environ.copy()
     return env
+
+def agent_browser_runnable():
+    return False
