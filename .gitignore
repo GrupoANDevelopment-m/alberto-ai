@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+.env
+.env.*
+secrets.json
+*.key
+*.pem
+
+# Build artifacts
+dist/
+build/
+*.whl
+*.tar.gz
+*.zip
+
+# Sandbox
+/tmp/alberto-sandbox*/
+
+# Test artifacts
+.coverage
+coverage.xml
+.pytest_cache/
+
+# Skills cache
+.skills/cache/

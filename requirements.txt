@@ -17,3 +17,5 @@ playwright>=1.40
 
 # CLI usability (v1.8)
 rich>=13.0  # beautiful terminal output
+crewai>=1.15,<2.0  # multi-agent runtime (replaces AIOX)
+litellm  # CrewAI LLM fallback

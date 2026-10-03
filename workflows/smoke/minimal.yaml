@@ -1,0 +1,14 @@
+name: minimal_smoke_test
+description: Tiny workflow for testing only (2 steps, fast)
+personas:
+  - name: engineer
+    role: Engineer
+  - name: reviewer
+    role: Reviewer
+workflow:
+  - persona: engineer
+    task: "Design solution for: {prompt}"
+    output_to: design
+  - persona: reviewer
+    task: "Review the design briefly"
+    output_to: review

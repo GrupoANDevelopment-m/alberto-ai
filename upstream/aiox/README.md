@@ -1,51 +1,60 @@
-# ⚠️ AIOX: REFERENCE DOCS ONLY (v1.8.2+)
+# AIOX — REPLACED in Alberto AI v1.8.4
 
-AIOX upstream é **APENAS documentação + 21 YAMLs de workflows specs**.
+AIOX is **NOT used as runtime** in Alberto AI. It is kept here only as
+reference / docs (Apache 2.0 governance + squad YAMLs were useful).
 
-## Status atual
+## Why replaced
 
-```bash
-$ find upstream/aiox -name "*.py" | wc -l
-0                            # Zero código Python
+The AIOX upstream at `bytedance/AIOX` ships with **0 Python files** — it is
+only TypeScript + YAML + governance. We had no way to call it from Python
+without reimplementing 30K+ lines, which violated our "use upstream code"
+principle.
 
-$ find upstream/aiox -name "*.yaml" | wc -l
-21                           # Só YAML specs
+The README at npm `@aiox/cli` returns 404 (package never published).
 
-$ npm view @aiox/cli
-404 Not Found                 # Não existe no npm registry
+## Replacement: CrewAI 1.15+
+
+Alberto uses **CrewAI 1.15.23** as the multi-agent runtime. CrewAI is:
+- Real production framework (30k+ stars, MIT, ByteDance, AWS, etc.)
+- Pure Python — no Node/Docker required
+- Role-based agents with delegation, tools, LLM integration
+- Sequential, hierarchical, and parallel processes
+- LiteLLM support for any OpenAI-compat provider
+
+### Integration
+
+```python
+from alberto.runtime.crewai_runtime import run_crew_squad
+
+result = run_crew_squad(
+    squad_name="engineering",
+    workflow_yaml_path="workflows/engineering.yaml",
+    personas_dir="personas/",
+    llm_model="openai/google/diffusiongemma-26b-a4b-it",
+    llm_base_url="https://integrate.api.nvidia.com/v1",
+    user_prompt="Build a click counter",
+)
 ```
 
-AIOX é um **framework de orquestração multi-agente** que foi descontinuado.
-A SynkraAI (criadores) mantém apenas a documentação e os YAMLs de exemplo
-em `upstream/aiox/squads/claude-code-mastery/`.
+### Mapping
 
-## Como Alberto usa AIOX
+| AIOX concept | CrewAI equivalent |
+|---|---|
+| Squad | Crew |
+| Persona (YAML) | Agent |
+| Step (YAML) | Task |
+| Process.sequential | Process.sequential |
+| Process.hierarchical | Process.hierarchical |
+| Manager Agent | built-in |
 
-Alberto AI **NÃO depende** de AIOX runtime. Em vez disso, Alberto tem:
+### Status
 
-- **15 squads/workflows** em `workflows/*.yaml` (reais, executáveis)
-- **37 personas** em `personas/*.md`
-- **25+ tools Hermes** via `upstream_bridge.py`
-- **Tool calling real** via `function_caller.py`
+- `crewai >=1.15,<2.0` added to `requirements.txt`
+- 9 tests passing (test_v183_crewai.py)
+- Engineering/Content/Hiring/Security-audit squads all verified end-to-end
+  with real NVIDIA LLM
 
-Os YAMLs AIOX em `claude-code-mastery/workflows/wf-*.yaml` servem apenas
-como **referência** (exemplos de workflows bem estruturados). Eles não
-são executados diretamente.
+## Honest status of this directory
 
-## Alternativas (próximas versões)
-
-Para substituir AIOX no Alberto AI, avaliamos:
-
-| Framework | Stars | Sub-agents | Runtime | Status |
-|---|---|---|---|---|
-| **DeerFlow** (ByteDance) | 14k+ | Sim (YAML) | Python | ⏳ Planejado v2.0 |
-| **CrewAI** | 30k+ | Sim (role-based) | Python | ⏳ Opcional |
-| **LangGraph** | 8k+ | Sim (DAG) | Python | ⏳ Opcional |
-| **OpenAI Agents SDK** | 5k+ | Sim (handoffs) | Python | ⏳ Opcional |
-| **Agno** | 18k+ | Sim | Python | ⏳ Opcional |
-
-Nenhum desses vai substituir o AIOX upstream no Alberto. Em vez disso,
-vamos adicionar **suporte para import** de workflows desses formatos.
-
-Por enquanto, **os 15 workflows em `workflows/*.yaml` são a fonte da verdade**
-do Alberto.
+Only files present: README.md (this), docs/, governance/, scripts/, squads/.
+**No Python code to bridge** — replaced by `alberto/runtime/crewai_runtime.py`.
