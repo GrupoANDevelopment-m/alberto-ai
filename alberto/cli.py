@@ -70,14 +70,12 @@ def cmd_chat(args, alberto: Alberto) -> int:
 
 
 def cmd_ask(args, alberto: Alberto) -> int:
-    out = alberto.dispatch(args.prompt)
-    strat = out["strategy"]
-    print(f"[strategy] {strat.mode} | engine={strat.engine} | task={strat.task_routing} | {strat.reason}")
-    result = out["result"]
-    if isinstance(result, dict):
-        print(json.dumps(result, indent=2))
-    else:
-        print(result)
+    out = alberto.chat(args.prompt)
+    print(f"[strategy] {out.get('strategy')}")
+    print(f"[response] {out.get('response', '')[:1500]}")
+    if out.get('tool_calls'):
+        for tc in out['tool_calls'][:3]:
+            print(f"[tool] {tc.get('tool')}: {str(tc.get('result', ''))[:200]}")
     return 0
 
 

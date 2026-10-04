@@ -334,3 +334,14 @@ Error: bash: line 1: instance-id-or-label: No such file or directory
 bash: line 5: bsk: command not found
 
 Added: better error handling
+
+
+## Evolution (v0.0.1)
+
+Auto-evolved after failure: bash: line 1: instance-id-or-label: No such file or directory
+bash: line 5: bsk: command not found
+
+Error: bash: line 1: instance-id-or-label: No such file or directory
+bash: line 5: bsk: command not found
+
+Added: better error handling
