@@ -68,7 +68,7 @@ def test_development_without_token_keeps_local_api_usable(monkeypatch, tmp_path)
     assert TestClient(app).get("/api/banner").status_code == 200
 
 
-def test_production_error_response_does_not_disclose_exception(monkeypatch, tmp_path):
+def test_production_error_response_and_logs_do_not_disclose_exception(monkeypatch, tmp_path, caplog):
     broken = SimpleNamespace(status=lambda: (_ for _ in ()).throw(RuntimeError("secret-path /root/private")))
     app = make_app(monkeypatch, tmp_path, production=True, token=TOKEN, alberto=broken)
     response = TestClient(app, raise_server_exceptions=False).get(
@@ -77,3 +77,4 @@ def test_production_error_response_does_not_disclose_exception(monkeypatch, tmp_
     assert response.status_code == 500
     assert response.json() == {"error": "internal server error"}
     assert "secret-path" not in response.text
+    assert "secret-path" not in caplog.text
