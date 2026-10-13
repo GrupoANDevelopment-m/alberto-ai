@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import shlex
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -829,45 +830,57 @@ def tool_question(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("skill")
 def tool_skill(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL skill loader — lists, shows, and runs skills from the catalog.
-
-    Actions:
-    - run (default): invoke a skill with input
-    - list: show all available skills
-    - show: show a skill's content
-    - search: search skills by keyword
-
-    Args: name (str), input (str, optional), action (str, default 'run').
-    """
+    """List, show, search, or execute skills through Alberto's configured sandbox."""
     name = args.get("name", "")
     inp = args.get("input", "")
     action = args.get("action", "run")
     try:
         from .skill_engine import list_skills, get_skill_content, run_skill
+
         if action == "list":
             skills = list_skills()
-            return "\n".join(skills[:100]) if skills else "(no skills)", False
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills[:100]
+            ]
+            return "\n".join(labels) if labels else "(no skills)", False
+
         if action == "show":
             if not name:
                 return "name required for show", True
             content = get_skill_content(name)
-            return content[:3000] if content else f"skill {name} not found", not content
+            return (content[:3000] if content else f"skill {name} not found"), not bool(content)
+
         if action == "search":
             if not name:
                 return "name required for search", True
             skills = list_skills()
-            matches = [s for s in skills if name.lower() in s.lower()][:30]
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills
+            ]
+            matches = [item for item in labels if name.lower() in item.lower()][:30]
             return "\n".join(matches) if matches else f"no matches for '{name}'", False
-        # Default: run
+
         if not name:
             return "no skill name", True
-        result = run_skill(alberto, name, inp)
-        return f"skill {name} executed: {json.dumps(result, default=str)[:1000]}", False
+        try:
+            skill_args = shlex.split(inp)
+        except ValueError as e:
+            return f"invalid skill argument quoting: {e}", True
+        result = run_skill(
+            name,
+            skill_args,
+            sandbox=getattr(alberto, "sandbox", None),
+        )
+        output = f"skill {name}: {json.dumps(result, default=str)[:1000]}"
+        return output, not bool(result.get("ok"))
     except ImportError:
         return "skill_engine not available", True
     except Exception as e:
         return f"skill {name} failed: {e}", True
-
 
 @register_tool("workflow")
 def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
