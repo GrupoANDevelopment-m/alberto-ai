@@ -48,7 +48,7 @@ The GitHub Actions workflow on Python 3.11 runs:
 3. selected integration/workflow tests with network, LLM, and slow tests deselected;
 4. coverage reporting.
 
-The latest completed CI run for the hardening branch reported **254 passed** in the offline regression suite, **10 passed** in CLI smoke tests, and **290 passed, 2 skipped, and 7 deselected** in the additional offline regression job. The coverage job reported **28% total coverage**. See [pull request #8](https://github.com/GrupoANDevelopment-m/alberto-ai/pull/8) for the run history. Passing offline tests do not validate live provider credentials, browser access, Docker isolation in deployment, or all optional integrations.
+The latest completed CI run available for the incremental hardening changes, [run 38469097503](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38469097503), reported **276 passed** in the primary offline regression suite, **10 passed** in CLI smoke tests, and **290 passed, 2 skipped, and 7 deselected** in the additional offline regression job. Its narrower branch-inclusive coverage suite reported **256 passed** and **25% combined line/branch coverage**. The CI coverage command was subsequently expanded to include the additional offline workflow/integration suites; that newer coverage selection has not yet produced a completed report. Passing offline tests do not validate live provider credentials, browser access, Docker isolation in deployment, or all optional integrations.
 
 For a local run, follow the exact test commands in `.github/workflows/ci.yml`. Avoid running provider-dependent tests without explicit authorization and valid credentials.
 
