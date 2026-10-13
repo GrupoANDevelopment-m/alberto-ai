@@ -75,6 +75,7 @@ EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 """)
         # docker-compose
+        (app_dir / "docker-compose.yml").write_text(self._docker_compose(name))
         # README
         (app_dir / "README.md").write_text(self._readme(name, description))
 
