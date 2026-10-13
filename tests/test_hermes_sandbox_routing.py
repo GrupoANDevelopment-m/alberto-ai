@@ -153,3 +153,26 @@ def test_patch_apply_requires_configured_sandbox():
 
     assert result["ok"] is False
     assert "sandbox is required" in result["error"]
+
+
+def test_patch_apply_changes_file_inside_sandbox_workspace(tmp_path):
+    from alberto.sandbox.base import LocalSandbox
+
+    sandbox = LocalSandbox(base_dir=tmp_path / "sandbox")
+    sandbox.write(Path("hello.txt"), "old\n")
+    patch = (
+        "diff --git a/hello.txt b/hello.txt\n"
+        "--- a/hello.txt\n"
+        "+++ b/hello.txt\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+
+    result = hermes_tools._patch_apply(
+        SimpleNamespace(sandbox=sandbox),
+        {"patch": patch, "workspace": "."},
+    )
+
+    assert result["ok"] is True
+    assert sandbox.read(Path("hello.txt")) == "new\n"
