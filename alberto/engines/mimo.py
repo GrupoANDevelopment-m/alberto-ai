@@ -18,6 +18,7 @@ Compose: real spec → tdd → review pipeline.
 """
 from __future__ import annotations
 import json
+import math
 import os
 import re
 import shutil
@@ -262,10 +263,28 @@ class MiMoEngine:
             ], max_tokens=300, temperature=0.0)
             text = resp["choices"][0]["message"]["content"]
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
+                if not isinstance(parsed, dict):
+                    raise ValueError("judge output must be a JSON object")
+                verdict = str(parsed.get("verdict", "fail")).strip().lower()
+                if verdict not in {"pass", "fail"}:
+                    verdict = "fail"
+                try:
+                    score = float(parsed.get("score", 0.0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                if not math.isfinite(score):
+                    score = 0.0
+                score = max(0.0, min(1.0, score))
+                reason = parsed.get("reason", "")
+                if not isinstance(reason, str):
+                    reason = str(reason)
+                return {"verdict": verdict, "score": score, "reason": reason[:500]}
             except Exception:
-                return {"verdict": "pass" if "pass" in text.lower() else "fail",
-                        "score": 0.5, "reason": text[:200]}
+                # Malformed judge output is a failed evaluation, never a pass
+                # based on a substring such as "pass" in "not pass".
+                return {"verdict": "fail", "score": 0.0,
+                        "reason": "judge returned invalid JSON or an invalid schema"}
         except Exception as e:
             return {"verdict": "unknown", "score": 0.0, "reason": f"judge unavailable: {e}"}
 
