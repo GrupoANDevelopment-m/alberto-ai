@@ -103,7 +103,7 @@ def _execute_shell_command(alberto, command: str, timeout: int):
                 cwd = candidate
         except (OSError, ValueError):
             cwd = home
-    return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
+    return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=str(cwd))
 
 
 @register_tool("run_shell")
@@ -746,6 +746,18 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
 
         from .upstream_bridge import _get
         parser = _get("patch_parser")
+        if parser is None:
+            # The parser is vendored in the repository. Load it directly as a
+            # fail-safe when the optional upstream registry is unavailable.
+            import importlib
+            from .upstream_bridge import UPSTREAM_ROOT
+            hermes_root = str(UPSTREAM_ROOT / "hermes")
+            if hermes_root not in sys.path:
+                sys.path.insert(0, hermes_root)
+            try:
+                parser = importlib.import_module("tools.patch_parser")
+            except Exception:
+                parser = None
         if parser is None or not hasattr(parser, "parse_v4a_patch") or not hasattr(parser, "apply_v4a_operations"):
             return "V4A patch parser is unavailable; no files were modified", True
 
