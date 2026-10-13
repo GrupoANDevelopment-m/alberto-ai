@@ -124,7 +124,7 @@ For a more stable comparison, run multiple repeats under the same provider, mode
 
 ## Current verification and known limits
 
-- The CI workflow has passed the targeted offline regression suites on Python 3.11 for the current hardening branch; check the linked pull request for the latest run and its exact counts.
+- The latest completed CI run for the hardening branch passed its selected suites on Python 3.11: 254 offline regression tests, 10 CLI smoke tests, and 290 passed / 2 skipped / 7 deselected in the additional regression job. See [pull request #8](https://github.com/GrupoANDevelopment-m/alberto-ai/pull/8) for the run history.
 - The most recent completed coverage report measured **28% overall coverage**. Critical paths still need more branch coverage and adversarial testing.
 - The CI suite deliberately skips or deselects provider/network-dependent tests. Those integrations require separate, credentialed end-to-end verification.
 - Security changes include fail-closed shell execution when no sandbox is configured, sandbox-confined directory changes, safer patch application, sandbox-backed skill execution, SSRF-focused URL checks, and enforcement of `ALBERTO_REQUIRE_DOCKER` at agent initialization.
