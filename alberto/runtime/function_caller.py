@@ -431,30 +431,36 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
     new = args.get("new_text", "")
     if not path or not old:
         return "path and old_text required", True
-    # NemoClaw pre-write check on the new text
+    # Validate the target before reading, then validate the resulting content
+    # before writing, using the same sandbox root as the other protected tools.
     try:
-        from .nemoclaw_real import scan_secrets
-        secrets = scan_secrets(new)
-        if secrets:
-            names = list({s["pattern"] for s in secrets})
-            return f"NemoClaw blocked edit: new_text contains secrets ({', '.join(names)})", True
-        from .nemoclaw_real import safe_resolve_path, PathViolation
-        safe_path = safe_resolve_path(path)
-    except ImportError:
-        safe_path = path
-        secrets = []
-    except PathViolation as e:
-        return f"NemoClaw blocked: {e}", True
-    try:
+        from .nemoclaw_real import nemoclaw_pre_write_check
+        allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+        if not allowed:
+            return f"NemoClaw blocked: {safe_path}", True
         p = Path(safe_path).expanduser()
+    except ImportError:
+        p = Path(path).expanduser()
+    except Exception as e:
+        return f"NemoClaw check failed: {e}", True
+    try:
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
         if old not in content:
             return f"old_text not found in {path}", True
         new_content = content.replace(old, new, 1)
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), new_content)
+            if not allowed:
+                return f"NemoClaw blocked: {final_path}", True
+            p = Path(final_path).expanduser()
+            new_content = final_content
+        except ImportError:
+            pass
         p.write_text(new_content)
-        return f"edited {path} ({len(content)} -> {len(new_content)} bytes)", False
+        return f"edited {p} ({len(content)} -> {len(new_content)} bytes)", False
     except Exception as e:
         return f"error: {e}", True
 
