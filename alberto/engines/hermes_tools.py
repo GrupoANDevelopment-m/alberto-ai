@@ -1420,9 +1420,15 @@ def _mimo_app_create(alberto, args):
         return {"ok": False, "error": "need a valid 'name' and non-empty 'spec'/'description'"}
     if len(spec) > 4000:
         return {"ok": False, "error": "app specification must be at most 4000 characters"}
-    output_dir = args.get("output_dir", "./apps")
+    output_dir = args.get("output_dir", "apps")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return {"ok": False, "error": "output_dir must be a non-empty path"}
+    # Tool-created projects are confined to the sandbox's apps directory.
+    apps_root = (Path(alberto.sandbox.home()) / "apps").resolve()
+    requested = Path(output_dir)
+    destination = (requested if requested.is_absolute() else apps_root / requested).resolve()
+    if destination != apps_root and apps_root not in destination.parents:
+        return {"ok": False, "error": "output_dir must stay inside the sandbox apps directory"}
     # MiMo creates the engineering plan; AppCreator materializes only the
     # reviewed, deterministic scaffold (never executes model-generated code).
     try:
@@ -1443,7 +1449,7 @@ def _mimo_app_create(alberto, args):
     if failed:
         return {"ok": False, "error": "MiMo planning incomplete", "failed_steps": failed, "plan": plan}
     from alberto.runtime.app_creator import AppCreator
-    created = AppCreator(output_dir=Path(output_dir)).create(
+    created = AppCreator(output_dir=destination).create(
         name, spec, stack=args.get("stack", "react-vite-fastapi"), run=False
     )
     if not created.get("ok"):
