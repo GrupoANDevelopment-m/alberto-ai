@@ -161,3 +161,45 @@ def test_failed_mimo_build_does_not_adopt_partial_output(tmp_path, monkeypatch):
         assert engine.binary is None
     finally:
         engine.stop()
+
+def test_binary_invoke_uses_supported_run_command_and_mimo_home(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import alberto.engines.mimo as mimo_module
+
+    engine, router, home = make_engine(tmp_path)
+    calls = []
+    engine._binary = "/opt/mimo/bin/mimo"
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="MiMo generated code", stderr="")
+
+    monkeypatch.setattr(mimo_module.subprocess, "run", fake_run)
+    try:
+        result = engine.invoke("Build a calculator", task="code")
+        assert result == "MiMo generated code"
+        args, kwargs = calls[0]
+        assert args == ["/opt/mimo/bin/mimo", "run", "Build a calculator"]
+        assert kwargs["env"]["MIMOCODE_HOME"] == str(home / ".mimo")
+        assert "--session" not in args
+        assert router.calls == 0
+    finally:
+        engine.stop()
+
+
+def test_binary_invoke_falls_back_to_model_router_on_cli_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import alberto.engines.mimo as mimo_module
+
+    engine, router, _ = make_engine(tmp_path)
+    engine._binary = "/opt/mimo/bin/mimo"
+    monkeypatch.setattr(
+        mimo_module.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="failed"),
+    )
+    try:
+        result = engine.invoke("Build a calculator", task="code")
+        assert result == "generated response"
+        assert router.calls == 1
+    finally:
+        engine.stop()
