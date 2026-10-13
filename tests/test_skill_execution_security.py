@@ -139,3 +139,41 @@ def test_python_args_placeholder_expands_multiple_literals(tmp_path, monkeypatch
 
     assert result["ok"] is True
     assert result["stdout"] == "alpha beta\n"
+
+
+def test_skill_cli_run_all_uses_configured_sandbox_and_returns_failure(tmp_path, monkeypatch):
+    import subprocess
+    from alberto import sandbox as sandbox_package
+    from alberto.runtime import skill_engine
+
+    skill_path = write_skill(
+        tmp_path,
+        "failing-skill",
+        code_block("bash", "exit 7"),
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path)
+    monkeypatch.setenv("ALBERTO_SANDBOX_KIND", "nemoclaw")
+
+    class FakeSandbox:
+        def __init__(self):
+            self.calls = []
+
+        def home(self):
+            return tmp_path
+
+        def run(self, command, *, timeout=60, cwd=None):
+            self.calls.append((command, timeout, cwd))
+            return subprocess.CompletedProcess(command, 7, "", "expected failure")
+
+    fake = FakeSandbox()
+    kinds = []
+    monkeypatch.setattr(
+        "alberto.sandbox.base.make_sandbox",
+        lambda kind: kinds.append(kind) or fake,
+    )
+
+    result = skill_engine.main(["run-all", "failing-skill"])
+
+    assert result == 1
+    assert kinds == ["nemoclaw"]
+    assert fake.calls == [(["bash", "-c", "exit 7"], 60, str(tmp_path))]
