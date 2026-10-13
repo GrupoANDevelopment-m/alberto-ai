@@ -266,7 +266,7 @@ docker compose up
 """
 
     def run(self, app_dir: Path) -> Dict[str, Any]:
-        """Try to install deps and start both servers."""
+        """Install dependencies and attempt to start both local development servers."""
         result = {"frontend_started": False, "backend_started": False}
         # Backend
         try:
@@ -282,8 +282,39 @@ docker compose up
             if backend_proc.poll() is None:
                 result["backend_started"] = True
                 result["backend_pid"] = backend_proc.pid
+            else:
+                result["backend_error"] = "backend process exited during startup"
         except Exception as e:
             result["backend_error"] = str(e)
+
+        # Frontend: do not silently report success if npm is unavailable or the
+        # development server exits during startup.
+        try:
+            if not shutil.which("npm"):
+                result["frontend_error"] = "npm not available"
+            else:
+                install = subprocess.run(
+                    ["npm", "install", "--no-audit", "--no-fund"],
+                    cwd=app_dir / "frontend", check=False,
+                    capture_output=True, text=True, timeout=180,
+                )
+                if install.returncode != 0:
+                    result["frontend_error"] = (install.stderr or "npm install failed")[-500:]
+                else:
+                    frontend_proc = subprocess.Popen(
+                        ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"],
+                        cwd=app_dir / "frontend",
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+                    time.sleep(2)
+                    if frontend_proc.poll() is None:
+                        result["frontend_started"] = True
+                        result["frontend_pid"] = frontend_proc.pid
+                    else:
+                        result["frontend_error"] = "frontend process exited during startup"
+        except Exception as e:
+            result["frontend_error"] = str(e)
+        result["ok"] = result["backend_started"] and result["frontend_started"]
         return result
 
 
