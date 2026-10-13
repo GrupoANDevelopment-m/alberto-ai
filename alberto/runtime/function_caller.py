@@ -127,6 +127,15 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "no path provided", True
     try:
         p = Path(path).expanduser()
+        # Apply the same sensitive-path policy to reads as to writes. Check both
+        # the supplied path and its resolved target so symlinks cannot bypass it.
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        resolved = p.resolve()
+        if is_protected_path(str(resolved)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
+        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text(errors="replace")
