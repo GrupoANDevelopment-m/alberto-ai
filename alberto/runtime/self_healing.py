@@ -131,7 +131,8 @@ class SelfHealer:
                     if fix_result.get("ok"):
                         result["fixed"] = True
                         result["applied"].append(fix_result.get("fix", fix.__name__))
-                        # Preserve the existing policy: evaluate all applicable fixers.
+                        # Stop after the first successful repair to avoid unrelated side effects.
+                        break
             except Exception as e:
                 result["actions"].append({"fix": fix.__name__, "error": str(e)})
 
