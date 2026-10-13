@@ -99,30 +99,48 @@ class SelfHealer:
         self.heal_log.parent.mkdir(parents=True, exist_ok=True)
         self.heal_log.write_text(json.dumps(self.history[-200:], indent=2, default=str))
 
-    def attempt_heal(self, error: Exception, context: str = "") -> Dict[str, Any]:
-        """Try to self-heal. Returns {fixed: bool, actions: [], lesson: ...}"""
+    def attempt_heal(
+        self, error: Exception, context: str = "", auto_apply: bool = True
+    ) -> Dict[str, Any]:
+        """Detect matching repairs and optionally execute them.
+
+        ``auto_apply=True`` preserves the existing automatic behavior for direct
+        callers. Tool callers can set it to False to inspect proposed repairs
+        without mutating the environment.
+        """
         error_str = str(error)
-        result = {"error": error_str, "context": context, "actions": [], "fixed": False, "matched_fixers": []}
+        result = {
+            "error": error_str,
+            "context": context,
+            "actions": [],
+            "applied": [],
+            "auto_apply": auto_apply,
+            "fixed": False,
+            "matched_fixers": [],
+        }
 
         for detect, fix in self.fixers:
             try:
                 if detect(error_str, context):
                     result["matched_fixers"].append(detect.__name__)
+                    if not auto_apply:
+                        continue
                     fix_result = fix(error_str, context)
                     result["actions"].append(fix_result)
                     if fix_result.get("ok"):
                         result["fixed"] = True
-                        # Don't break — apply ALL applicable fixers
+                        result["applied"].append(fix_result.get("fix", fix.__name__))
+                        # Preserve the existing policy: evaluate all applicable fixers.
             except Exception as e:
                 result["actions"].append({"fix": fix.__name__, "error": str(e)})
 
-        # Record
+        # Record both dry-run proposals and actual repair attempts.
         result["at"] = time.time()
         self.history.append(result)
         self._save()
 
-        # If couldn't fix, record lesson
-        if not result["fixed"]:
+        # A dry run is not a failed repair attempt and must not create a false lesson.
+        if auto_apply and not result["fixed"]:
             try:
                 self.alberto.learner.lesson_learned(
                     mistake=f"heal failed: {error_str[:100]}",
@@ -277,16 +295,20 @@ class SelfHealer:
             return {"fix": "stale_lock", "ok": False, "error": str(e)}
 
     def _fix_tls_error(self, err: str, ctx: str) -> Dict[str, Any]:
-        # Switch to next available API key
+        # Only rotate among NVIDIA credentials. Copying OPENAI_API_KEY or another
+        # provider's credential into NVIDIA_API_KEY creates invalid auth and can
+        # contaminate provider routing.
         try:
-            nvidia_keys = [k for k in os.environ if k.startswith("NVIDIA_API_KEY") or "API_KEY" in k]
             current = os.environ.get("NVIDIA_API_KEY")
-            # Try to find a different key
-            for k in os.environ:
-                if "_KEY" in k and k != "NVIDIA_API_KEY" and os.environ.get(k):
-                    os.environ["NVIDIA_API_KEY"] = os.environ[k]
-                    return {"fix": "tls_error", "ok": True, "switched_to": k}
-            return {"fix": "tls_error", "ok": False, "reason": "no alternate key available"}
+            candidates = sorted(
+                key for key, value in os.environ.items()
+                if key.startswith("NVIDIA_API_KEY_") and value and value != current
+            )
+            if not candidates:
+                return {"fix": "tls_error", "ok": False, "reason": "no alternate NVIDIA API key available"}
+            selected = candidates[0]
+            os.environ["NVIDIA_API_KEY"] = os.environ[selected]
+            return {"fix": "tls_error", "ok": True, "switched_to": selected}
         except Exception as e:
             return {"fix": "tls_error", "ok": False, "error": str(e)}
 

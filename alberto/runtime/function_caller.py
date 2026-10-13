@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import shlex
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -127,6 +128,15 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "no path provided", True
     try:
         p = Path(path).expanduser()
+        # Apply the same sensitive-path policy to reads as to writes. Check both
+        # the supplied path and its resolved target so symlinks cannot bypass it.
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        resolved = p.resolve()
+        if is_protected_path(str(resolved)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
+        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text(errors="replace")
@@ -255,15 +265,27 @@ def tool_alberto_cli(alberto, args: Dict) -> Tuple[str, bool]:
     if not cmd_str:
         return "no args", True
     try:
-        # Build env with PYTHONPATH
+        # Only allow explicitly safe CLI subcommands when invoked by the agent.
+        from alberto.security_whitelist import validate_alberto_subcommand
+        is_safe, reason = validate_alberto_subcommand(cmd_str)
+        if not is_safe:
+            return f"BLOCKED by Alberto security: {reason}", True
+        try:
+            cli_args = shlex.split(cmd_str)
+        except ValueError as e:
+            return f"invalid CLI argument quoting: {e}", True
+        if not cli_args:
+            return "no args", True
+        # Build env with PYTHONPATH; pass argv directly so shell metacharacters
+        # are data, never command separators or substitutions.
         env = os.environ.copy()
         base_dir = str(Path(__file__).parent.parent.parent)
         existing_pp = env.get("PYTHONPATH", "")
         if base_dir not in existing_pp:
             env["PYTHONPATH"] = f"{base_dir}:{existing_pp}" if existing_pp else base_dir
-        full_cmd = f"{sys.executable} -m alberto.cli {cmd_str}"
-        r = subprocess.run(full_cmd, shell=True, capture_output=True, text=True,
-                          timeout=120, env=env)
+        full_cmd = [sys.executable, "-m", "alberto.cli", *cli_args]
+        r = subprocess.run(full_cmd, shell=False, capture_output=True, text=True,
+                           timeout=120, env=env)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
@@ -283,7 +305,10 @@ def tool_heal_attempt(alberto, args: Dict) -> Tuple[str, bool]:
     """
     error = args.get("error", "")
     context = args.get("context", "")
-    auto_apply = bool(args.get("auto_apply", False))
+    auto_apply_value = args.get("auto_apply", False)
+    if not isinstance(auto_apply_value, bool):
+        return "auto_apply must be a boolean", True
+    auto_apply = auto_apply_value
     if not error:
         return "no error provided", True
     try:
@@ -361,6 +386,15 @@ def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "no path", True
     try:
         p = Path(path).expanduser()
+        # The MiMo-compatible read tool must enforce the same sensitive-path
+        # policy as file_read, including symlink targets.
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        resolved = p.resolve()
+        if is_protected_path(str(resolved)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
+        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         lines = p.read_text(errors="replace").splitlines()
@@ -410,30 +444,46 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
     new = args.get("new_text", "")
     if not path or not old:
         return "path and old_text required", True
-    # NemoClaw pre-write check on the new text
+    # Preserve the existing edit contract: reject secrets in new_text rather
+    # than silently changing the requested replacement. Then enforce path checks.
     try:
         from .nemoclaw_real import scan_secrets
         secrets = scan_secrets(new)
         if secrets:
-            names = list({s["pattern"] for s in secrets})
+            names = list({item["pattern"] for item in secrets})
             return f"NemoClaw blocked edit: new_text contains secrets ({', '.join(names)})", True
-        from .nemoclaw_real import safe_resolve_path, PathViolation
-        safe_path = safe_resolve_path(path)
     except ImportError:
-        safe_path = path
-        secrets = []
-    except PathViolation as e:
-        return f"NemoClaw blocked: {e}", True
+        pass
+    # Validate the target before reading, then validate the resulting content
+    # before writing, using the same sandbox root as the other protected tools.
     try:
+        from .nemoclaw_real import nemoclaw_pre_write_check
+        allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+        if not allowed:
+            return f"NemoClaw blocked: {safe_path}", True
         p = Path(safe_path).expanduser()
+    except ImportError:
+        p = Path(path).expanduser()
+    except Exception as e:
+        return f"NemoClaw check failed: {e}", True
+    try:
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
         if old not in content:
             return f"old_text not found in {path}", True
         new_content = content.replace(old, new, 1)
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), new_content)
+            if not allowed:
+                return f"NemoClaw blocked: {final_path}", True
+            p = Path(final_path).expanduser()
+            new_content = final_content
+        except ImportError:
+            pass
         p.write_text(new_content)
-        return f"edited {path} ({len(content)} -> {len(new_content)} bytes)", False
+        return f"edited {p} ({len(content)} -> {len(new_content)} bytes)", False
     except Exception as e:
         return f"error: {e}", True
 
@@ -472,6 +522,9 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
         return "no pattern", True
     try:
         base_p = Path(base).expanduser()
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(base_p)) or is_protected_path(str(base_p.resolve())):
+            return "BLOCKED by NemoClaw: protected search path", True
         if not base_p.exists():
             return f"path not found: {base}", True
         try:
@@ -483,6 +536,9 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
             if not f.is_file():
                 continue
             try:
+                # Skip sensitive targets, including symlinks that resolve to them.
+                if is_protected_path(str(f)) or is_protected_path(str(f.resolve())):
+                    continue
                 content = f.read_text(errors="replace")
             except Exception:
                 continue
@@ -556,7 +612,16 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
     if not path or not edits:
         return "path and edits required", True
     try:
-        p = Path(path).expanduser()
+        # Validate the target before reading it, then re-check the final content
+        # before writing. This keeps multiedit aligned with the protected write tools.
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {safe_path}", True
+            p = Path(safe_path).expanduser()
+        except ImportError:
+            p = Path(path).expanduser()
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
@@ -567,8 +632,17 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
             if old and old in content:
                 content = content.replace(old, new, 1)
                 applied += 1
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), content)
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {final_path}", True
+            p = Path(final_path).expanduser()
+            content = final_content
+        except ImportError:
+            pass
         p.write_text(content)
-        return f"applied {applied}/{len(edits)} edits to {path}", applied != len(edits)
+        return f"applied {applied}/{len(edits)} edits to {p}", applied != len(edits)
     except Exception as e:
         return f"error: {e}", True
 
@@ -612,8 +686,20 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
                             content_parts.append(line.content + "\n")
                 if content_parts:
                     target = Path(p_str).parent / file_path if not Path(file_path).is_absolute() else Path(file_path)
+                    output_content = "".join(content_parts)
+                    try:
+                        from .nemoclaw_real import nemoclaw_pre_write_check
+                        allowed, final_target, final_content = nemoclaw_pre_write_check(
+                            alberto, str(target), output_content
+                        )
+                        if not allowed:
+                            return f"BLOCKED by NemoClaw: {final_target}", True
+                        target = Path(final_target).expanduser()
+                        output_content = final_content
+                    except ImportError:
+                        pass
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text("".join(content_parts))
+                    target.write_text(output_content)
                     results.append(f"wrote {target}")
             return "\n".join(results), False
         # Fallback parser
@@ -639,9 +725,22 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
             else:
                 pi += 1
         if out:
+            output_content = "".join(out)
             p = Path(p_str).expanduser()
-            p.write_text("".join(out))
-            return f"patched {p_str} (fallback parser)", False
+            try:
+                from .nemoclaw_real import nemoclaw_pre_write_check
+                allowed, final_path, final_content = nemoclaw_pre_write_check(
+                    alberto, str(p), output_content
+                )
+                if not allowed:
+                    return f"BLOCKED by NemoClaw: {final_path}", True
+                p = Path(final_path).expanduser()
+                output_content = final_content
+            except ImportError:
+                pass
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(output_content)
+            return f"patched {p} (fallback parser)", False
         return "no usable hunks in patch", True
     except Exception as e:
         return f"error: {e}", True
