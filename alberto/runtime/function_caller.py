@@ -292,7 +292,10 @@ def tool_heal_attempt(alberto, args: Dict) -> Tuple[str, bool]:
     """
     error = args.get("error", "")
     context = args.get("context", "")
-    auto_apply = bool(args.get("auto_apply", False))
+    auto_apply_value = args.get("auto_apply", False)
+    if not isinstance(auto_apply_value, bool):
+        return "auto_apply must be a boolean", True
+    auto_apply = auto_apply_value
     if not error:
         return "no error provided", True
     try:
