@@ -174,3 +174,28 @@ def test_nemoclaw_run_timeout_returns_completed_process():
         assert result.returncode == 124
     finally:
         sb.cleanup()
+
+
+def test_require_docker_fails_closed_when_docker_is_unavailable(monkeypatch):
+    from alberto.sandbox.base import NemoClawSandbox
+
+    monkeypatch.setenv("ALBERTO_REQUIRE_DOCKER", "1")
+    monkeypatch.setattr(NemoClawSandbox, "_has_docker", lambda self: False)
+
+    with pytest.raises(RuntimeError, match="Docker is unavailable"):
+        NemoClawSandbox("must-not-fallback")
+
+
+def test_require_docker_fails_closed_when_container_initialization_fails(monkeypatch):
+    from alberto.sandbox.base import NemoClawSandbox
+
+    monkeypatch.setenv("ALBERTO_REQUIRE_DOCKER", "true")
+    monkeypatch.setattr(NemoClawSandbox, "_has_docker", lambda self: True)
+
+    def fail_init(self):
+        raise RuntimeError("container startup failed")
+
+    monkeypatch.setattr(NemoClawSandbox, "_init_docker", fail_init)
+
+    with pytest.raises(RuntimeError, match="could not be initialized"):
+        NemoClawSandbox("must-not-fallback-on-init-error")
