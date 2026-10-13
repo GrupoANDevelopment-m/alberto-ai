@@ -182,6 +182,12 @@ class MiMoEngine:
                                                 updated_at=excluded.updated_at""",
             (key, value, tags, now, now),
         )
+        # Keep the FTS index synchronized on both insert and upsert. Without
+        # deleting the previous row, updates can leave stale indexed content.
+        self._db.execute(
+            "DELETE FROM memory_fts WHERE rowid=(SELECT id FROM memory WHERE key=?)",
+            (key,),
+        )
         self._db.execute(
             "INSERT INTO memory_fts(rowid, key, value, tags) VALUES ((SELECT id FROM memory WHERE key=?), ?, ?, ?)",
             (key, key, value, tags or ""),
