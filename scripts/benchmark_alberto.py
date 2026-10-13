@@ -210,8 +210,10 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
                     })
                     if result.get("error"):
                         record["error"] = str(result["error"])
+                        record["passed"] = False
                     elif not model_used:
                         record["error"] = "no model strategy returned; not counted as a model-quality pass"
+                        record["passed"] = False
                 except Exception as exc:
                     record["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
                     record["error"] = f"{type(exc).__name__}: {exc}"
