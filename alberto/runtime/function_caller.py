@@ -657,8 +657,20 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
                             content_parts.append(line.content + "\n")
                 if content_parts:
                     target = Path(p_str).parent / file_path if not Path(file_path).is_absolute() else Path(file_path)
+                    output_content = "".join(content_parts)
+                    try:
+                        from .nemoclaw_real import nemoclaw_pre_write_check
+                        allowed, final_target, final_content = nemoclaw_pre_write_check(
+                            alberto, str(target), output_content
+                        )
+                        if not allowed:
+                            return f"BLOCKED by NemoClaw: {final_target}", True
+                        target = Path(final_target).expanduser()
+                        output_content = final_content
+                    except ImportError:
+                        pass
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text("".join(content_parts))
+                    target.write_text(output_content)
                     results.append(f"wrote {target}")
             return "\n".join(results), False
         # Fallback parser
@@ -684,9 +696,22 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
             else:
                 pi += 1
         if out:
+            output_content = "".join(out)
             p = Path(p_str).expanduser()
-            p.write_text("".join(out))
-            return f"patched {p_str} (fallback parser)", False
+            try:
+                from .nemoclaw_real import nemoclaw_pre_write_check
+                allowed, final_path, final_content = nemoclaw_pre_write_check(
+                    alberto, str(p), output_content
+                )
+                if not allowed:
+                    return f"BLOCKED by NemoClaw: {final_path}", True
+                p = Path(final_path).expanduser()
+                output_content = final_content
+            except ImportError:
+                pass
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(output_content)
+            return f"patched {p} (fallback parser)", False
         return "no usable hunks in patch", True
     except Exception as e:
         return f"error: {e}", True
