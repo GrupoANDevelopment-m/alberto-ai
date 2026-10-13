@@ -1,4 +1,5 @@
 """Regression tests for self-healing dry-run and apply behavior."""
+import os
 from types import SimpleNamespace
 
 from alberto.runtime.function_caller import tool_heal_attempt
@@ -95,3 +96,30 @@ def test_tool_heal_attempt_applies_only_when_explicitly_true():
     assert "FIXED" in output
     assert len(calls) == 1
     assert learner.lessons == []
+
+
+def test_tls_recovery_never_copies_another_providers_key(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("NVIDIA_API_KEY_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-current-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-other-test-key")
+    healer = SelfHealer.__new__(SelfHealer)
+
+    result = healer._fix_tls_error("TLS certificate error", "test")
+
+    assert result["ok"] is False
+    assert os.environ["NVIDIA_API_KEY"] == "nvidia-current-test-key"
+
+
+def test_tls_recovery_rotates_to_nvidia_backup_only(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-current-test-key")
+    monkeypatch.setenv("NVIDIA_API_KEY_BACKUP", "nvidia-backup-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-other-test-key")
+    healer = SelfHealer.__new__(SelfHealer)
+
+    result = healer._fix_tls_error("TLS certificate error", "test")
+
+    assert result["ok"] is True
+    assert result["switched_to"] == "NVIDIA_API_KEY_BACKUP"
+    assert os.environ["NVIDIA_API_KEY"] == "nvidia-backup-test-key"
