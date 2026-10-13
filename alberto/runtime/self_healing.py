@@ -99,30 +99,48 @@ class SelfHealer:
         self.heal_log.parent.mkdir(parents=True, exist_ok=True)
         self.heal_log.write_text(json.dumps(self.history[-200:], indent=2, default=str))
 
-    def attempt_heal(self, error: Exception, context: str = "") -> Dict[str, Any]:
-        """Try to self-heal. Returns {fixed: bool, actions: [], lesson: ...}"""
+    def attempt_heal(
+        self, error: Exception, context: str = "", auto_apply: bool = True
+    ) -> Dict[str, Any]:
+        """Detect matching repairs and optionally execute them.
+
+        ``auto_apply=True`` preserves the existing automatic behavior for direct
+        callers. Tool callers can set it to False to inspect proposed repairs
+        without mutating the environment.
+        """
         error_str = str(error)
-        result = {"error": error_str, "context": context, "actions": [], "fixed": False, "matched_fixers": []}
+        result = {
+            "error": error_str,
+            "context": context,
+            "actions": [],
+            "applied": [],
+            "auto_apply": auto_apply,
+            "fixed": False,
+            "matched_fixers": [],
+        }
 
         for detect, fix in self.fixers:
             try:
                 if detect(error_str, context):
                     result["matched_fixers"].append(detect.__name__)
+                    if not auto_apply:
+                        continue
                     fix_result = fix(error_str, context)
                     result["actions"].append(fix_result)
                     if fix_result.get("ok"):
                         result["fixed"] = True
-                        # Don't break — apply ALL applicable fixers
+                        result["applied"].append(fix_result.get("fix", fix.__name__))
+                        # Preserve the existing policy: evaluate all applicable fixers.
             except Exception as e:
                 result["actions"].append({"fix": fix.__name__, "error": str(e)})
 
-        # Record
+        # Record both dry-run proposals and actual repair attempts.
         result["at"] = time.time()
         self.history.append(result)
         self._save()
 
-        # If couldn't fix, record lesson
-        if not result["fixed"]:
+        # A dry run is not a failed repair attempt and must not create a false lesson.
+        if auto_apply and not result["fixed"]:
             try:
                 self.alberto.learner.lesson_learned(
                     mistake=f"heal failed: {error_str[:100]}",
