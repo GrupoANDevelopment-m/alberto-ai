@@ -105,7 +105,7 @@ def kill_alberto_serves(pidfile: Path):
         raise RuntimeError("refusing to terminate the current launcher process")
     cmdline_path = Path(f"/proc/{pid}/cmdline")
     try:
-        cmdline = cmdline_path.read_bytes().replace(b"\\x00", b" ").decode(errors="replace")
+        cmdline = cmdline_path.read_bytes().replace(b"\x00", b" ").decode(errors="replace")
     except OSError as exc:
         raise RuntimeError("cannot verify existing server process; refusing to kill it") from exc
     if "alberto-serve" not in cmdline and "alberto.cli serve" not in cmdline:
@@ -121,7 +121,7 @@ def kill_alberto_serves(pidfile: Path):
     else:
         # Re-check the process identity before escalating to SIGKILL.
         try:
-            current = cmdline_path.read_bytes().replace(b"\\x00", b" ").decode(errors="replace")
+            current = cmdline_path.read_bytes().replace(b"\x00", b" ").decode(errors="replace")
         except OSError:
             current = ""
         if ("alberto-serve" in current or "alberto.cli serve" in current):
