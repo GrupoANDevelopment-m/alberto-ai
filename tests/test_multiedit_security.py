@@ -98,3 +98,19 @@ def test_edit_still_updates_file_inside_sandbox(tmp_path):
 
     assert is_error is False
     assert target.read_text(encoding="utf-8") == "after"
+
+
+def test_edit_preserves_secret_rejection_contract(tmp_path):
+    alberto = FakeAlberto(tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("before", encoding="utf-8")
+    candidate_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+
+    output, is_error = tool_edit(
+        alberto,
+        {"path": str(target), "old_text": "before", "new_text": candidate_secret},
+    )
+
+    assert is_error is True
+    assert "contains secrets" in output
+    assert target.read_text(encoding="utf-8") == "before"
