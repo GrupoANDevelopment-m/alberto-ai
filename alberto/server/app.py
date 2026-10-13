@@ -117,12 +117,12 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.middleware("http")
     async def require_api_auth(request: Request, call_next):
-        protected_path = (
-            request.url.path.startswith("/api/")
-            or request.url.path in {"/__docs", "/__redoc", "/openapi.json"}
-        )
         token = os.environ.get("ALBERTO_API_TOKEN", "")
         is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        protected_path = request.url.path.startswith("/api/") or (
+            not is_production
+            and request.url.path in {"/__docs", "/__redoc", "/openapi.json"}
+        )
         if protected_path and (token or is_production):
             authorization = request.headers.get("authorization", "")
             scheme, separator, supplied = authorization.partition(" ")
