@@ -104,3 +104,29 @@ def test_browser_rejects_private_target_before_importing_browser_tool(monkeypatc
 
     assert result["ok"] is False
     assert "unsafe browser URL" in result["error"]
+
+
+def test_file_tool_reads_and_writes_only_inside_sandbox(tmp_path, monkeypatch):
+    sandbox = __import__("alberto.sandbox.base", fromlist=["LocalSandbox"]).LocalSandbox(
+        base_dir=tmp_path / "sandbox",
+    )
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    write_result = hermes_tools.tool_file(
+        SimpleNamespace(sandbox=sandbox),
+        {"action": "write", "path": "workspace/note.txt", "content": "hello"},
+    )
+    read_result = hermes_tools.tool_file(
+        SimpleNamespace(sandbox=sandbox),
+        {"action": "read", "path": "workspace/note.txt"},
+    )
+    blocked = hermes_tools.tool_file(
+        SimpleNamespace(sandbox=sandbox),
+        {"action": "read", "path": str(outside)},
+    )
+
+    assert write_result["ok"] is True
+    assert read_result == {"ok": True, "content": "hello"}
+    assert blocked["ok"] is False
+    assert "escapes sandbox" in blocked["error"]
