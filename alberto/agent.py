@@ -45,6 +45,29 @@ from .upstream_bridge import (
 )
 
 
+def resolve_sandbox_kind(env=None) -> str:
+    """Resolve sandbox mode and honor ALBERTO_REQUIRE_DOCKER without silent downgrade.
+
+    LocalSandbox is a host-process development mode, not an OS security boundary.
+    When Docker isolation is required, the configuration must select NemoClaw;
+    a conflicting explicit setting fails closed.
+    """
+    env = os.environ if env is None else env
+    require_docker = str(env.get("ALBERTO_REQUIRE_DOCKER", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    configured = str(env.get("ALBERTO_SANDBOX_KIND", "")).strip().lower()
+    if require_docker:
+        if configured and configured != "nemoclaw":
+            raise RuntimeError(
+                "ALBERTO_REQUIRE_DOCKER is enabled but ALBERTO_SANDBOX_KIND "
+                f"is '{configured}'; use ALBERTO_SANDBOX_KIND=nemoclaw. "
+                "Refusing to run without the required isolation."
+            )
+        return "nemoclaw"
+    return configured or "local"
+
+
 class Alberto:
     """Top-level agent. Wires real MiMo + real Hermes + Alberto orchestration."""
 
@@ -55,7 +78,7 @@ class Alberto:
         if sandbox is not None:
             self.sandbox = sandbox
         else:
-            sandbox_kind = os.environ.get("ALBERTO_SANDBOX_KIND", "local").strip().lower()
+            sandbox_kind = resolve_sandbox_kind()
             self.sandbox = make_sandbox(sandbox_kind)
         self.router = ModelRouter(self._load_or_init_config())
         self.mimo = MiMoEngine(self.sandbox, self.router)
