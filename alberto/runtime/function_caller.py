@@ -86,6 +86,18 @@ import re as _re_security
 _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
+def _execute_shell_command(alberto, command: str, timeout: int):
+    """Use the configured sandbox for agent shell calls when available."""
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is not None and callable(getattr(sandbox, "run", None)):
+        cwd = str(sandbox.home()) if callable(getattr(sandbox, "home", None)) else None
+        return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
+    # Compatibility for direct legacy callers without an Alberto instance.
+    return subprocess.run(
+        command, shell=True, capture_output=True, text=True, timeout=timeout
+    )
+
+
 @register_tool("run_shell")
 def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     """Run a shell command. Args: command (str), timeout (int, default 30).
@@ -110,7 +122,7 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
@@ -355,7 +367,7 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = r.stdout or ""
         err = r.stderr or ""
         combined = out + (("\n[stderr]\n" + err) if err else "")
@@ -558,20 +570,22 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("webfetch")
 def tool_webfetch(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo webfetch.ts equivalent — fetch a URL and return text content.
-    Args: url (str), max_length (int, default 5000)."""
+    """Fetch public HTTP(S) text content with SSRF and response-size checks."""
     url = args.get("url", "")
-    max_length = int(args.get("max_length", 5000))
     if not url:
         return "no url", True
     try:
         import urllib.request
+        max_length = max(1, min(int(args.get("max_length", 5000)), 100000))
+        _validate_public_web_url(url)
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8", errors="replace")
+        opener = urllib.request.build_opener(_SafeWebRedirectHandler())
+        with opener.open(req, timeout=30) as response:
+            raw = response.read(max_length * 4 + 1)
+        content = raw.decode("utf-8", errors="replace")
         return content[:max_length], False
     except Exception as e:
-        return f"error fetching {url}: {e}", True
+        return f"error fetching URL: {e}", True
 
 
 @register_tool("websearch")
@@ -928,45 +942,57 @@ def tool_question(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("skill")
 def tool_skill(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL skill loader — lists, shows, and runs skills from the catalog.
-
-    Actions:
-    - run (default): invoke a skill with input
-    - list: show all available skills
-    - show: show a skill's content
-    - search: search skills by keyword
-
-    Args: name (str), input (str, optional), action (str, default 'run').
-    """
+    """List, show, search, or execute skills through Alberto's configured sandbox."""
     name = args.get("name", "")
     inp = args.get("input", "")
     action = args.get("action", "run")
     try:
         from .skill_engine import list_skills, get_skill_content, run_skill
+
         if action == "list":
             skills = list_skills()
-            return "\n".join(skills[:100]) if skills else "(no skills)", False
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills[:100]
+            ]
+            return "\n".join(labels) if labels else "(no skills)", False
+
         if action == "show":
             if not name:
                 return "name required for show", True
             content = get_skill_content(name)
-            return content[:3000] if content else f"skill {name} not found", not content
+            return (content[:3000] if content else f"skill {name} not found"), not bool(content)
+
         if action == "search":
             if not name:
                 return "name required for search", True
             skills = list_skills()
-            matches = [s for s in skills if name.lower() in s.lower()][:30]
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills
+            ]
+            matches = [item for item in labels if name.lower() in item.lower()][:30]
             return "\n".join(matches) if matches else f"no matches for '{name}'", False
-        # Default: run
+
         if not name:
             return "no skill name", True
-        result = run_skill(alberto, name, inp)
-        return f"skill {name} executed: {json.dumps(result, default=str)[:1000]}", False
+        try:
+            skill_args = shlex.split(inp)
+        except ValueError as e:
+            return f"invalid skill argument quoting: {e}", True
+        result = run_skill(
+            name,
+            skill_args,
+            sandbox=getattr(alberto, "sandbox", None),
+        )
+        output = f"skill {name}: {json.dumps(result, default=str)[:1000]}"
+        return output, not bool(result.get("ok"))
     except ImportError:
         return "skill_engine not available", True
     except Exception as e:
         return f"skill {name} failed: {e}", True
-
 
 @register_tool("workflow")
 def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
