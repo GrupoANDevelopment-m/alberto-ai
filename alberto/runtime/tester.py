@@ -79,26 +79,28 @@ class AppTester:
             latencies = []
             errors = 0
             for i in range(min(20, n_requests)):
-                t0 = time.time()
+                t0 = time.perf_counter()
                 try:
                     with urllib.request.urlopen(f"http://127.0.0.1:{port}{endpoint}", timeout=10) as r:
                         r.read()
-                    latencies.append((time.time() - t0) * 1000)
+                    latencies.append((time.perf_counter() - t0) * 1000)
                 except Exception:
                     errors += 1
             # Concurrent load
             import concurrent.futures
             def hit():
-                t0 = time.time()
+                t0 = time.perf_counter()
                 try:
                     with urllib.request.urlopen(f"http://127.0.0.1:{port}{endpoint}", timeout=10) as r:
                         r.read()
-                    return (time.time() - t0) * 1000, True
+                    return (time.perf_counter() - t0) * 1000, True
                 except Exception:
                     return 0, False
+            concurrent_start = time.perf_counter()
             with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
                 futures = [ex.submit(hit) for _ in range(n_requests)]
                 results = [f.result() for f in futures]
+            concurrent_elapsed = max(time.perf_counter() - concurrent_start, 0.001)
             conc_latencies = [r[0] for r in results if r[1]]
             conc_errors = sum(1 for r in results if not r[1])
             out = {
@@ -117,10 +119,11 @@ class AppTester:
                 "concurrent": {
                     "n": len(conc_latencies),
                     "errors": conc_errors,
+                    "duration_s": round(concurrent_elapsed, 6),
                     "p50_ms": self._percentile(conc_latencies, 50),
                     "p95_ms": self._percentile(conc_latencies, 95),
                     "p99_ms": self._percentile(conc_latencies, 99),
-                    "throughput_rps": n_requests / max(sum(conc_latencies) / 1000 / concurrency, 0.001),
+                    "throughput_rps": len(conc_latencies) / concurrent_elapsed,
                 },
             }
             return out
