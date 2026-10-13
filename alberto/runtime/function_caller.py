@@ -490,6 +490,9 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
         return "no pattern", True
     try:
         base_p = Path(base).expanduser()
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(base_p)) or is_protected_path(str(base_p.resolve())):
+            return "BLOCKED by NemoClaw: protected search path", True
         if not base_p.exists():
             return f"path not found: {base}", True
         try:
@@ -501,6 +504,9 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
             if not f.is_file():
                 continue
             try:
+                # Skip sensitive targets, including symlinks that resolve to them.
+                if is_protected_path(str(f)) or is_protected_path(str(f.resolve())):
+                    continue
                 content = f.read_text(errors="replace")
             except Exception:
                 continue
