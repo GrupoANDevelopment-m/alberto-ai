@@ -143,7 +143,6 @@ def test_python_args_placeholder_expands_multiple_literals(tmp_path, monkeypatch
 
 def test_skill_cli_run_all_uses_configured_sandbox_and_returns_failure(tmp_path, monkeypatch):
     import subprocess
-    from alberto import sandbox as sandbox_package
     from alberto.runtime import skill_engine
 
     skill_path = write_skill(
