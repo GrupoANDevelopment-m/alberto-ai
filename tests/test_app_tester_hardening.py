@@ -125,4 +125,7 @@ def test_perf_reports_successful_requests_and_percentiles(tmp_path, monkeypatch)
     assert result["concurrent"]["n"] == 3
     assert result["sequential"]["errors"] == 0
     assert result["concurrent"]["errors"] == 0
-    assert result["concurrent"]["throughput_rps"] > 0
+    assert result["concurrent"]["duration_s"] > 0
+    assert result["concurrent"]["throughput_rps"] == pytest.approx(
+        result["concurrent"]["n"] / result["concurrent"]["duration_s"]
+    )
