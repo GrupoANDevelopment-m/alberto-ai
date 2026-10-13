@@ -34,7 +34,7 @@ Set credentials through environment variables. Never commit API keys to the repo
 
 ```bash
 export NVIDIA_API_KEY="your-provider-key"
-alberto model set chat nvidia google/diffusiongemma-26b-a4b-it https://integrate.api.nvidia.com/v1
+alberto model set chat nvidia google/diffusiongemma-26b-a4b-it https://integrate.api.nvidia.com/v1 NVIDIA_API_KEY
 alberto chat "Olá, Alberto. Responde em português."
 ```
 
