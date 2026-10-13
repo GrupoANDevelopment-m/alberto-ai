@@ -8,10 +8,11 @@ from pathlib import Path
 import yaml
 import pytest
 
-sys.path.insert(0, "/workspace/alberto-ai")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
-WORKFLOWS_DIR = Path("/workspace/alberto-ai/workflows")
-PERSONAS_DIR = Path("/workspace/alberto-ai/personas")
+WORKFLOWS_DIR = REPO_ROOT / "workflows"
+PERSONAS_DIR = REPO_ROOT / "personas"
 
 
 def _load_workflows():
