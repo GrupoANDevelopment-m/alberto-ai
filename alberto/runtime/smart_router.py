@@ -235,6 +235,7 @@ class SmartRouter:
         s.total_cost_usd += cost_in + cost_out
         s.avg_latency_ms = ((s.avg_latency_ms * (s.calls - 1)) + elapsed_ms) / s.calls
         s.last_used = time.time()
+        s.last_error = ""
         self._save_stats()
 
     def _record_failure(self, spec: ModelSpec, error: str, elapsed_ms: float):
