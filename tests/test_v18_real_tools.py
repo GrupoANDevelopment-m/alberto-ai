@@ -154,21 +154,35 @@ class TestToolLSP:
 class TestToolActor:
     """Real persistent shell actor."""
 
-    def test_run_echo(self):
+    def test_run_echo(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["actor"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"command": "echo actor-test-98765", "session": "test"})
-        assert "actor-test-98765" in out
-        assert not err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "actor")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"command": "echo actor-test-98765", "session": "test"})
+            assert "actor-test-98765" in out
+            assert not err
+        finally:
+            alberto.sandbox.cleanup()
 
-    def test_session_list(self):
+    def test_session_list(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["actor"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"action": "list_sessions"})
-        assert isinstance(out, str)
-        assert not err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "actor")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"action": "list_sessions"})
+            assert isinstance(out, str)
+            assert not err
+        finally:
+            alberto.sandbox.cleanup()
 
     def test_blocked_command(self):
         """Hermes tirith should block dangerous commands."""
