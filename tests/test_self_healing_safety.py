@@ -116,3 +116,64 @@ def test_server_watchdog_owns_restart_lifecycle():
 
     assert result["ok"] is True
     assert "watchdog" in result["action"]
+
+
+def test_memory_pruning_writes_private_backup_before_deleting(tmp_path):
+    import json
+    import stat
+
+    entries = [
+        {"key": f"memory-{index}", "value": f"value-{index}", "updated_at": index}
+        for index in range(101)
+    ]
+    deleted = []
+
+    class FakeMimo:
+        _home = tmp_path / "mimo"
+
+        def memory_list(self):
+            return list(entries)
+
+        def memory_delete(self, key):
+            deleted.append(key)
+
+    healer = make_healer(SimpleNamespace(mimo=FakeMimo()))
+    healer.heal_log = tmp_path / ".mimo" / "heal_log.json"
+
+    result = healer._fix_memory_leak("memory leak", "")
+
+    assert result["ok"] is True
+    assert result["removed"] == 51
+    assert len(deleted) == 51
+    backup = Path(result["backup"])
+    assert backup.exists()
+    assert len(json.loads(backup.read_text(encoding="utf-8"))) == 101
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
+def test_import_error_auto_install_uses_allowlist(monkeypatch):
+    from alberto.runtime import self_healing
+
+    calls = []
+    monkeypatch.setattr(self_healing, "_pip_install", lambda package: calls.append(package) or (True, "ok"))
+    healer = make_healer(SimpleNamespace())
+
+    result = healer._fix_import_error("ModuleNotFoundError: No module named 'yaml'", "")
+
+    assert result["ok"] is True
+    assert result["package"] == "pyyaml"
+    assert calls == ["pyyaml"]
+
+
+def test_import_error_blocks_unapproved_package_install(monkeypatch):
+    from alberto.runtime import self_healing
+
+    calls = []
+    monkeypatch.setattr(self_healing, "_pip_install", lambda package: calls.append(package) or (True, "ok"))
+    healer = make_healer(SimpleNamespace())
+
+    result = healer._fix_import_error("ModuleNotFoundError: No module named 'unapproved_payload'", "")
+
+    assert result["ok"] is False
+    assert "allowlist" in result["reason"]
+    assert calls == []
