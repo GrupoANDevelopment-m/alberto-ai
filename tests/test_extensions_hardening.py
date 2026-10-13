@@ -77,3 +77,19 @@ def test_extension_target_rejects_symlink_escape(installer, tmp_path):
     (root / "skills" / "linked").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes"):
         installer._target_for("skill", "linked")
+
+
+
+@pytest.mark.parametrize("source", ["skill:../outside", "skill:../../../../etc"])
+def test_install_rejects_builtin_skill_source_traversal(installer, source):
+    with pytest.raises(ValueError, match="escapes"):
+        installer.install("safe-name", source=source)
+
+
+def test_install_rejects_plain_http_git_source(installer, monkeypatch):
+    monkeypatch.setattr(
+        "alberto.runtime.extensions.subprocess.run",
+        lambda *a, **k: pytest.fail("insecure source must be rejected before git"),
+    )
+    with pytest.raises(ValueError, match="HTTPS"):
+        installer.install("unsafe", source="http://example.invalid/repo.git")
