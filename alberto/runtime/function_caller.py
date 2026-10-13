@@ -87,10 +87,12 @@ import re as _re_security
 _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
-def _validated_shell_timeout(value, *, default: int = 30, maximum: int = 3600):
+def _validated_shell_timeout(value, *, maximum: int = 3600):
     """Parse a tool-provided timeout without leaking conversion errors or unbounded waits."""
-    if value is None:
-        value = default
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
     try:
         timeout = int(value)
     except (TypeError, ValueError, OverflowError):
