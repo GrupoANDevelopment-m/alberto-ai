@@ -164,3 +164,14 @@ def test_docker_exists_uses_argv_not_shell_string():
 
     assert sb.exists(Path("/tmp/file with spaces")) is False
     assert sb._container.last_command == ["test", "-e", "/tmp/file with spaces"]
+
+
+def test_nemoclaw_run_timeout_returns_completed_process():
+    from alberto.sandbox.base import NemoClawSandbox
+    sb = NemoClawSandbox("timeout-contract")
+    try:
+        result = sb.run(["python3", "-c", "import time; time.sleep(2)"], timeout=1)
+        assert result.returncode == 124
+        assert "timeout after 1s" in result.stderr or result.returncode == 124
+    finally:
+        sb.cleanup()
