@@ -213,3 +213,67 @@ def test_call_vision_converts_transport_exception_to_error(monkeypatch):
     result = integration.call_vision(None, "describe image", "https://example.invalid/image.png")
     assert result["ok"] is False
     assert "provider timeout" in result["error"]
+
+
+def test_setup_fallback_chain_configures_routes_and_fallbacks():
+    class Config:
+        def __init__(self):
+            self.fallbacks = []
+
+        def add_fallback(self, spec):
+            self.fallbacks.append(spec)
+
+    class Router:
+        def __init__(self):
+            self.tasks = {}
+            self.config = Config()
+
+        def set_task(self, task, spec):
+            self.tasks[task] = spec
+
+    agent = SimpleNamespace(router=Router())
+    assert integration.setup_fallback_chain(agent) is True
+    assert {"code", "chat", "reasoning", "multimodal"} == set(agent.router.tasks)
+    assert len(agent.router.config.fallbacks) == 2
+    assert agent.router.config.fallbacks[0].options["supports_function_calling"] is False
+    assert agent.router.config.fallbacks[1].options["reasoning_effort"] == "max"
+
+
+def test_setup_fallback_chain_returns_false_on_router_failure():
+    agent = SimpleNamespace(router=SimpleNamespace(
+        set_task=lambda *_: (_ for _ in ()).throw(RuntimeError("route config failed"))
+    ))
+    assert integration.setup_fallback_chain(agent) is False
+
+
+def test_nemoclaw_sandbox_status_reports_docker_and_paths(monkeypatch):
+    monkeypatch.setattr(integration, "is_docker_available", lambda: True)
+    result = integration.nemoclaw_sandbox_status()
+    assert result["docker_available"] is True
+    assert result["fallback"] == "NemoClaw"
+    assert isinstance(result["nemoclaw_cli_installed"], bool)
+    assert isinstance(result["nemoclaw_source_available"], bool)
+
+
+def test_call_multimodal_kimi_returns_stream_chunks(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
+
+    class Response:
+        def iter_lines(self):
+            return [b"data: first", b"", b"data: second"]
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: Response())
+    result = integration.call_multimodal_kimi(None, "describe", "https://example.invalid/image.png")
+    assert result["ok"] is True
+    assert result["chunks"] == ["data: first", "data: second"]
+    assert result["full"] == "data: first\\ndata: second"
+
+
+def test_call_multimodal_kimi_converts_transport_exception(monkeypatch):
+    def fail(*args, **kwargs):
+        raise TimeoutError("multimodal timeout")
+
+    monkeypatch.setattr("requests.post", fail)
+    result = integration.call_multimodal_kimi(None, "describe", "https://example.invalid/image.png")
+    assert result["ok"] is False
+    assert "multimodal timeout" in result["error"]
