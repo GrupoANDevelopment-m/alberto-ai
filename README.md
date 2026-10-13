@@ -112,6 +112,14 @@ python -m pytest \
   tests/test_webfetch_ssrf.py \
   tests/test_shell_sandbox_routing.py \
   tests/test_hermes_sandbox_routing.py \
+  tests/test_function_caller_hardening.py \
+  tests/test_integration_adapters.py \
+  tests/test_agent_core_hardening.py \
+  tests/test_smart_router_hardening.py \
+  tests/test_extensions_hardening.py \
+  tests/test_app_tester_hardening.py \
+  tests/test_server_production_security.py \
+  tests/test_server_launcher_security.py \
   tests/test_benchmark_alberto.py \
   tests/test_no_embedded_credentials.py -v --tb=short
 
