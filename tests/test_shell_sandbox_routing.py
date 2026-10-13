@@ -47,3 +47,19 @@ def test_bash_uses_configured_sandbox(tmp_path):
     assert is_error is False
     assert "sandbox output" in output
     assert sandbox.calls == [(["bash", "-lc", "printf safe"], 9, str(tmp_path))]
+
+
+def test_shell_tool_fails_closed_without_sandbox(monkeypatch):
+    monkeypatch.setattr(
+        function_caller.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("direct host subprocess forbidden")),
+    )
+
+    output, is_error = function_caller.tool_run_shell(
+        None,
+        {"command": "echo should-not-run"},
+    )
+
+    assert is_error is True
+    assert "sandbox is required" in output
