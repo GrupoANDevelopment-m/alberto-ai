@@ -431,6 +431,16 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
     new = args.get("new_text", "")
     if not path or not old:
         return "path and old_text required", True
+    # Preserve the existing edit contract: reject secrets in new_text rather
+    # than silently changing the requested replacement. Then enforce path checks.
+    try:
+        from .nemoclaw_real import scan_secrets
+        secrets = scan_secrets(new)
+        if secrets:
+            names = list({item["pattern"] for item in secrets})
+            return f"NemoClaw blocked edit: new_text contains secrets ({', '.join(names)})", True
+    except ImportError:
+        pass
     # Validate the target before reading, then validate the resulting content
     # before writing, using the same sandbox root as the other protected tools.
     try:
