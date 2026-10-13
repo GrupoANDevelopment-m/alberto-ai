@@ -334,15 +334,20 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.exception_handler(Exception)
     async def all_exception_handler(request: Request, exc: Exception):
-        logging.getLogger("alberto.server").exception(
-            "Unhandled request exception for %s %s", request.method, request.url.path
-        )
         is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        logger = logging.getLogger("alberto.server")
         if is_production:
+            logger.error(
+                "Unhandled request exception for %s %s (type=%s)",
+                request.method, request.url.path, type(exc).__name__,
+            )
             return JSONResponse(
                 status_code=500,
                 content={"error": "internal server error"},
             )
+        logger.exception(
+            "Unhandled request exception for %s %s", request.method, request.url.path
+        )
         return JSONResponse(
             status_code=500,
             content={"error": str(exc), "type": type(exc).__name__},
