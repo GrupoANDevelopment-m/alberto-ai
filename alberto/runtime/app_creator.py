@@ -157,6 +157,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><
         (src / "index.css").write_text("""@tailwind base; @tailwind components; @tailwind utilities;
 body { font-family: ui-sans-serif, system-ui, sans-serif; }
 """)
+        # Encode user-provided content as JSX string expressions, not source fragments.
+        name_literal = json.dumps(name)
+        description_literal = json.dumps(description)
         (src / "App.tsx").write_text(f"""import {{ useState }} from 'react'
 export default function App() {{
   const [count, setCount] = useState(0)
