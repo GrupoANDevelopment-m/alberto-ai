@@ -49,7 +49,6 @@ from .upstream_bridge import (
     real_extract_document as _bridge_extract_document,
     real_budget_config as _bridge_budget_config,
 )
-import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
