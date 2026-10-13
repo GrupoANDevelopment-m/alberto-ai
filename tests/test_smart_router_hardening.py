@@ -1,6 +1,7 @@
 """Focused regression tests for SmartRouter selection, fallbacks and accounting."""
 import json
 from pathlib import Path
+import pytest
 from types import SimpleNamespace
 
 from alberto.runtime.smart_router import ModelSpec, ModelStats, SmartRouter
@@ -104,7 +105,7 @@ def test_complete_reports_when_all_models_fail(tmp_path, monkeypatch):
 def test_call_requires_credentials_before_network(tmp_path, monkeypatch):
     r = router(tmp_path)
     monkeypatch.delenv("TEST_API_KEY", raising=False)
-    with __import__("pytest").raises(RuntimeError, match="missing credential TEST_API_KEY"):
+    with pytest.raises(RuntimeError, match="missing credential TEST_API_KEY"):
         r._call(spec("model"), [], 10, 0.0, False)
 
 
@@ -177,3 +178,41 @@ def test_success_clears_stale_provider_error(tmp_path):
     r._record_success(s, {"input_tokens": 0, "output_tokens": 0}, 10)
     assert r.stats["recovered"].last_error == ""
     assert r.stats["recovered"].successes == 1
+
+
+
+@pytest.mark.parametrize(
+    ("base_url", "message"),
+    [
+        ("http://provider.invalid/v1", "HTTPS"),
+        ("https://user:password@provider.invalid/v1", "without userinfo"),
+        ("https://provider.invalid/v1?token=leak", "without userinfo"),
+        ("/relative/path", "valid URL"),
+    ],
+)
+def test_call_rejects_unsafe_provider_urls_before_network(
+    tmp_path, monkeypatch, base_url, message
+):
+    r = router(tmp_path)
+    monkeypatch.setenv("TEST_API_KEY", "dummy")
+    monkeypatch.delenv("ALBERTO_ENV", raising=False)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: pytest.fail("unsafe URL must be rejected before network"),
+    )
+    with pytest.raises(ValueError, match=message):
+        r._call(ModelSpec(
+            provider="test", model_id="model", base_url=base_url,
+            credential_env="TEST_API_KEY",
+        ), [], 10, 0.0, False)
+
+
+def test_call_rejects_loopback_http_in_production(tmp_path, monkeypatch):
+    r = router(tmp_path)
+    monkeypatch.setenv("TEST_API_KEY", "dummy")
+    monkeypatch.setenv("ALBERTO_ENV", "production")
+    with pytest.raises(ValueError, match="HTTPS"):
+        r._call(ModelSpec(
+            provider="test", model_id="model", base_url="http://127.0.0.1:8080/v1",
+            credential_env="TEST_API_KEY",
+        ), [], 10, 0.0, False)
