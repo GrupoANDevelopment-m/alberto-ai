@@ -55,6 +55,12 @@ class AppTester:
         """Performance benchmark. Starts backend, hits endpoint N times concurrent."""
         if not self.backend.exists():
             return {"ok": False, "error": "no backend dir"}
+        if not isinstance(n_requests, int) or isinstance(n_requests, bool) or n_requests < 1:
+            return {"ok": False, "error": "n_requests must be a positive integer"}
+        if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+            return {"ok": False, "error": "concurrency must be a positive integer"}
+        if not isinstance(endpoint, str) or not endpoint.startswith("/") or endpoint.startswith("//"):
+            return {"ok": False, "error": "endpoint must be a local absolute path beginning with one slash"}
         # Start backend
         port = self._free_port()
         proc = subprocess.Popen(
@@ -94,7 +100,7 @@ class AppTester:
             conc_latencies = [r[0] for r in results if r[1]]
             conc_errors = sum(1 for r in results if not r[1])
             out = {
-                "ok": True,
+                "ok": errors == 0 and conc_errors == 0,
                 "phase": "perf",
                 "endpoint": endpoint,
                 "n_requests": n_requests,
