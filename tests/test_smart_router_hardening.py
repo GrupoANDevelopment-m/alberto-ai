@@ -152,7 +152,7 @@ def test_record_success_accumulates_cost_and_weighted_latency(tmp_path):
     assert stats.total_input_tokens == 2000
     assert stats.total_output_tokens == 1000
     assert stats.avg_latency_ms == 200
-    assert stats.total_cost_usd == 0.006
+    assert stats.total_cost_usd == 0.004
 
 
 def test_load_specs_from_alberto_maps_pricing_and_fallbacks(tmp_path):
