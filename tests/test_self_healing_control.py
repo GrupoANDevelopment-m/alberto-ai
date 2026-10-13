@@ -126,3 +126,25 @@ def test_tls_recovery_rotates_to_nvidia_backup_only(monkeypatch):
     assert result["ok"] is True
     assert result["switched_to"] == "NVIDIA_API_KEY_BACKUP"
     assert os.environ["NVIDIA_API_KEY"] == "nvidia-backup-test-key"
+
+
+
+def test_auto_apply_stops_after_first_successful_repair():
+    healer, learner, calls = make_healer()
+    second_calls = []
+
+    def second_detect(error, context):
+        return True
+
+    def second_repair(error, context):
+        second_calls.append(True)
+        return {"fix": "must_not_run", "ok": True}
+
+    healer.fixers.append((second_detect, second_repair))
+    result = healer.attempt_heal(RuntimeError("recoverable failure"), auto_apply=True)
+
+    assert result["fixed"] is True
+    assert result["applied"] == ["repair_sample"]
+    assert len(calls) == 1
+    assert second_calls == []
+    assert learner.lessons == []
