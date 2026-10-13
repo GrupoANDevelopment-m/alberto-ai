@@ -244,46 +244,51 @@ class TestRealHermesTools:
             assert "hello-world-test" in result.get("stdout", "")
 
     def test_real_file_read_write(self, tmp_path):
-        """Real hermes file tool."""
+        """Hermes file operations are confined to the configured sandbox."""
         from alberto.engines.hermes_tools import tool_file
+        from alberto.sandbox.base import LocalSandbox
+
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
-        # Write
-        write_result = tool_file(alberto, {
-            "action": "write",
-            "path": "real-test.txt",
-            "content": "real-content-12345",
-        })
-        # Read back
-        read_result = tool_file(alberto, {
-            "action": "read",
-            "path": str(tmp_path / "real-test.txt"),
-        })
-        # Both should be dicts
-        assert isinstance(write_result, dict)
-        assert isinstance(read_result, dict)
-        # Read should contain the content
-        read_content = read_result.get("content", "") or str(read_result)
-        assert "real-content-12345" in read_content
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+
+        alberto = FakeAlberto(tmp_path / "file-sandbox")
+        try:
+            write_result = tool_file(alberto, {
+                "action": "write",
+                "path": "real-test.txt",
+                "content": "real-content-12345",
+            })
+            read_result = tool_file(alberto, {
+                "action": "read",
+                "path": "real-test.txt",
+            })
+            assert write_result.get("ok") is True, write_result
+            assert read_result.get("ok") is True, read_result
+            assert "real-content-12345" in read_result.get("content", "")
+        finally:
+            alberto.sandbox.cleanup()
+
 
     def test_real_code_execution(self, tmp_path):
-        """Real hermes code_execution runs Python."""
+        """Python code execution must run through the configured sandbox."""
         from alberto.engines.hermes_tools import tool_code_execution
+        from alberto.sandbox.base import LocalSandbox
+
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
-        result = tool_code_execution(alberto, {
-            "language": "python",
-            "code": "print(2 + 2)",
-        })
-        # Returns dict like {"ok": True, "output": "4\n", ...}
-        assert isinstance(result, dict)
-        if result.get("ok"):
-            output = str(result.get("output", "") or result.get("stdout", ""))
-            assert "4" in output
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+
+        alberto = FakeAlberto(tmp_path / "code-sandbox")
+        try:
+            result = tool_code_execution(alberto, {
+                "language": "python",
+                "code": "print(2 + 2)",
+            })
+            assert result.get("ok") is True, result
+            assert "4" in result.get("stdout", "")
+        finally:
+            alberto.sandbox.cleanup()
 
 
 # ============================================================================
