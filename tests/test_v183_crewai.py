@@ -8,6 +8,7 @@ to replace the AIOX stub. These tests verify:
 4. Error handling is real (not stub)
 """
 import os
+from pathlib import Path
 import sys
 import pytest
 
@@ -49,8 +50,8 @@ class TestCrewAISquadExecution:
         from alberto.runtime.crewai_runtime import run_crew_squad
         r = run_crew_squad(
             squad_name="engineering",
-            workflow_yaml_path="/workspace/alberto-ai/workflows/engineering.yaml",
-            personas_dir="/workspace/alberto-ai/personas",
+            workflow_yaml_path=str(Path(__file__).resolve().parent.parent / "workflows" / "engineering.yaml"),
+            personas_dir=str(Path(__file__).resolve().parent.parent / "personas"),
             llm_model="openai/google/diffusiongemma-26b-a4b-it",
             llm_base_url="https://integrate.api.nvidia.com/v1",
             user_prompt="Build a click counter in JS. Brief answer.",
