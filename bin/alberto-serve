@@ -187,7 +187,7 @@ def watchdog_loop(port: int, max_restarts: int, host: str):
 def main():
     p = argparse.ArgumentParser(prog="alberto-serve",
                                description="Alberto server with watchdog + preflight")
-    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8741)
     p.add_argument("--max-restarts", type=int, default=10,
                   help="max consecutive restarts before giving up (0=infinite)")
