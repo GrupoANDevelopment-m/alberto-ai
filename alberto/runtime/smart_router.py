@@ -19,6 +19,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -197,6 +198,20 @@ class SmartRouter:
         api_key = os.environ.get(spec.credential_env, "")
         if not api_key:
             raise RuntimeError(f"missing credential {spec.credential_env}")
+        parsed = urlsplit(spec.base_url)
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("provider base_url must be a valid URL without userinfo, query, or fragment")
+        production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if parsed.scheme != "https":
+            if production or parsed.scheme != "http" or parsed.hostname not in loopback_hosts:
+                raise ValueError("provider base_url must use HTTPS (HTTP is allowed only for loopback development)")
         # Strip /v1 if already in base_url (some providers include it)
         base = spec.base_url.rstrip('/')
         if base.endswith('/v1'):
