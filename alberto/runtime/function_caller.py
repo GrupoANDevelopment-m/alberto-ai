@@ -743,7 +743,7 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
     try:
         safe, reason, blocked = _bridge_path_security(p_str)
         if blocked:
-            return f"Hermes path_security blocked: {reason}", True
+            return f"BLOCKED by Hermes path_security: {reason}", True
 
         from .upstream_bridge import _get
         parser = _get("patch_parser")
@@ -766,7 +766,40 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
         if parse_error:
             return f"patch parse error: {parse_error}", True
         if not operations:
-            return "no operations in patch", True
+            # Backward compatibility: accept a unified hunk when the target
+            # path is supplied separately (older Alberto callers use this form).
+            from pathlib import Path as _PatchPath
+            import re as _patch_re
+            hunks = []
+            current_hunk = None
+            for line in patch.splitlines():
+                if line.startswith("@@"):
+                    if current_hunk is not None and current_hunk.lines:
+                        hunks.append(current_hunk)
+                    hint_match = _patch_re.match(r"@@\s*(.+?)\s*@@", line)
+                    hint = hint_match.group(1) if hint_match else None
+                    current_hunk = parser.Hunk(context_hint=hint)
+                    continue
+                if current_hunk is None or not line:
+                    continue
+                if line.startswith("\\"):
+                    continue
+                if line.startswith("+"):
+                    current_hunk.lines.append(parser.HunkLine("+", line[1:]))
+                elif line.startswith("-"):
+                    current_hunk.lines.append(parser.HunkLine("-", line[1:]))
+                elif line.startswith(" "):
+                    current_hunk.lines.append(parser.HunkLine(" ", line[1:]))
+            if current_hunk is not None and current_hunk.lines:
+                hunks.append(current_hunk)
+            if hunks:
+                operations = [parser.PatchOperation(
+                    operation=parser.OperationType.UPDATE,
+                    file_path=_PatchPath(p_str).name,
+                    hunks=hunks,
+                )]
+            else:
+                return "no usable patch operations", True
 
         from types import SimpleNamespace
         base_dir = Path(p_str).expanduser().resolve().parent
@@ -844,7 +877,7 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
         result = parser.apply_v4a_operations(operations, _SafePatchFileOps())
         if not result.success:
             return f"patch failed: {result.error or 'unknown patch error'}", True
-        summary = result.diff or "patch applied"
+        summary = "patched: " + (result.diff or "patch applied")
         if result.files_modified or result.files_created or result.files_deleted:
             summary += (
                 f"\nmodified={result.files_modified}"
