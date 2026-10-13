@@ -1108,68 +1108,80 @@ def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("actor")
 def tool_actor(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL persistent shell session — preserves cwd and env across calls.
-
-    Each session is a directory under ~/.alberto/actor_sessions/<session>/
-    with .cwd and .env files. Commands are executed via subprocess with
-    the persistent cwd and env.
-
-    Args: command (str), session (str, default 'default'),
-          action (str: 'run'|'reset'|'list_sessions', default 'run').
-    """
+    """Run persistent actor sessions inside Alberto's configured sandbox."""
     cmd = args.get("command", "")
-    session = args.get("session", "default")
-    action = args.get("action", "run")
-    # Sessions live in ~/.alberto/actor_sessions/
-    sessions_root = Path.home() / ".alberto" / "actor_sessions"
-    sessions_root.mkdir(parents=True, exist_ok=True)
-    session_dir = sessions_root / session
-    session_dir.mkdir(exist_ok=True)
-    cwd_file = session_dir / "cwd"
-    env_file = session_dir / "env"
-    history_file = session_dir / "history.log"
-    if action == "list_sessions":
-        sessions = [d.name for d in sessions_root.iterdir() if d.is_dir()]
-        return "\n".join(sessions) if sessions else "(no sessions)", False
-    if action == "reset":
-        import shutil
-        shutil.rmtree(session_dir)
-        session_dir.mkdir(exist_ok=True)
-        return f"session {session} reset", False
-    if not cmd:
-        return "no command", True
-    # Real Hermes tirith_security check
-    safe, reason, blocked = _bridge_tirith_security(cmd)
-    if blocked:
-        return f"Hermes tirith blocked: {reason}", True
+    session = str(args.get("session", "default"))
+    action = str(args.get("action", "run")).strip().lower()
+
+    if action == "run":
+        if not isinstance(cmd, str) or not cmd.strip():
+            return "no command", True
+        blocked_match = _BLOCKED_RE.search(cmd)
+        if blocked_match:
+            try:
+                from . import audit
+                audit.log_blocked_shell(cmd, blocked_match.group(0))
+            except ImportError:
+                pass
+            return f"BLOCKED by Alberto security: matches '{blocked_match.group(0)}'", True
+        safe, reason, blocked = _bridge_tirith_security(cmd)
+        if blocked:
+            return f"Hermes tirith blocked: {reason}", True
+    elif action not in ("reset", "list_sessions"):
+        return f"unknown actor action: {action}", True
+
     sandbox = getattr(alberto, "sandbox", None)
     if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
         return "a configured sandbox is required for actor execution", True
-    sandbox_home = Path(sandbox.home()).resolve()
-    cwd = sandbox_home
-    if cwd_file.exists():
-        try:
-            requested = Path(cwd_file.read_text().strip()).expanduser()
-            requested = requested if requested.is_absolute() else sandbox_home / requested
-            requested = requested.resolve()
-            requested.relative_to(sandbox_home)
-            if requested.is_dir():
-                cwd = requested
-        except (OSError, ValueError):
-            cwd = sandbox_home
-    # Do not load host environment files into the execution environment.
-    with open(history_file, "a", encoding="utf-8") as history:
-        history.write(f"$ {cmd}\n")
+
     try:
-        r = sandbox.run(["bash", "-lc", cmd], timeout=60, cwd=cwd)
-        out = (r.stdout or "") + (r.stderr or "")
-        with open(history_file, "a", encoding="utf-8") as history:
-            history.write(out + "\n")
-        return f"[actor:{session} cwd={cwd} exit={r.returncode}]\n{out[:1500]}", r.returncode != 0
-    except subprocess.TimeoutExpired:
-        return f"[actor:{session}] timeout after 60s", True
+        sandbox_home = Path(sandbox.home()).resolve()
+        sessions_root = (sandbox_home / ".alberto" / "actor_sessions").resolve()
+        sessions_root.relative_to(sandbox_home)
+        sessions_root.mkdir(parents=True, exist_ok=True)
+
+        session_dir = (sessions_root / session).resolve()
+        try:
+            session_dir.relative_to(sessions_root)
+        except ValueError:
+            return "actor session path escapes sandbox", True
+        if session_dir == sessions_root:
+            return "invalid actor session name", True
+
+        if action == "list_sessions":
+            sessions = [d.name for d in sessions_root.iterdir() if d.is_dir()]
+            return "\n".join(sessions) if sessions else "(no sessions)", False
+        if action == "reset":
+            import shutil
+            if session_dir.exists():
+                shutil.rmtree(session_dir)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            return f"session {session} reset", False
+
+        session_dir.mkdir(parents=True, exist_ok=True)
+        cwd_file = session_dir / "cwd"
+        history_file = session_dir / "history.log"
+        cwd = sandbox_home
+        if cwd_file.exists():
+            try:
+                requested = Path(cwd_file.read_text(encoding="utf-8").strip())
+                requested = requested if requested.is_absolute() else sandbox_home / requested
+                requested = requested.resolve()
+                requested.relative_to(sandbox_home)
+                if requested.is_dir():
+                    cwd = requested
+            except (OSError, ValueError):
+                cwd = sandbox_home
+
+        with history_file.open("a", encoding="utf-8") as history:
+            history.write(f"$ {cmd}\n")
+        result = sandbox.run(["bash", "-lc", cmd], timeout=60, cwd=cwd)
+        output = (result.stdout or "") + (result.stderr or "")
+        with history_file.open("a", encoding="utf-8") as history:
+            history.write(output + "\n")
+        return f"[actor:{session} cwd={cwd} exit={result.returncode}]\n{output[:1500]}", result.returncode != 0
     except Exception as e:
-        return f"error: {e}", True
+        return f"actor sandbox execution failed: {type(e).__name__}: {e}", True
 
 
 @register_tool("lsp")
