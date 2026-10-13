@@ -166,6 +166,14 @@ def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) ->
         return {"ok": False, "error": str(e)}
 
 
+
+def get_skill_content(name: str) -> str:
+    """Return raw SKILL.md content for a named skill, or an empty string."""
+    path = find_skill(name)
+    if not path:
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
 def list_skills(category: Optional[str] = None) -> List[Dict[str, Any]]:
     """List all skills with metadata."""
     from alberto.upstream_bridge import list_upstream_skills
