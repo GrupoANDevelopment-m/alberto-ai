@@ -370,6 +370,15 @@ def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "no path", True
     try:
         p = Path(path).expanduser()
+        # The MiMo-compatible read tool must enforce the same sensitive-path
+        # policy as file_read, including symlink targets.
+        from .nemoclaw_real import is_protected_path
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        resolved = p.resolve()
+        if is_protected_path(str(resolved)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
+        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         lines = p.read_text(errors="replace").splitlines()
