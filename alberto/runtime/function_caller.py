@@ -88,15 +88,12 @@ _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
 def _execute_shell_command(alberto, command: str, timeout: int):
-    """Use the configured sandbox for agent shell calls when available."""
+    """Run shell commands only through the configured sandbox; fail closed."""
     sandbox = getattr(alberto, "sandbox", None)
-    if sandbox is not None and callable(getattr(sandbox, "run", None)):
-        cwd = str(sandbox.home()) if callable(getattr(sandbox, "home", None)) else None
-        return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
-    # Compatibility for direct legacy callers without an Alberto instance.
-    return subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=timeout
-    )
+    if sandbox is None or not callable(getattr(sandbox, "run", None)):
+        raise RuntimeError("a configured sandbox is required for shell execution")
+    cwd = str(sandbox.home()) if callable(getattr(sandbox, "home", None)) else None
+    return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
 
 
 @register_tool("run_shell")
@@ -1132,28 +1129,30 @@ def tool_actor(alberto, args: Dict) -> Tuple[str, bool]:
     safe, reason, blocked = _bridge_tirith_security(cmd)
     if blocked:
         return f"Hermes tirith blocked: {reason}", True
-    # Load persistent cwd/env
-    cwd = cwd_file.read_text().strip() if cwd_file.exists() else str(Path.cwd())
-    env = os.environ.copy()
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                env[k] = v
-    # Append to history
-    with open(history_file, "a") as f:
-        f.write(f"$ {cmd}\n")
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
+        return "a configured sandbox is required for actor execution", True
+    sandbox_home = Path(sandbox.home()).resolve()
+    cwd = sandbox_home
+    if cwd_file.exists():
+        try:
+            requested = Path(cwd_file.read_text().strip()).expanduser()
+            requested = requested if requested.is_absolute() else sandbox_home / requested
+            requested = requested.resolve()
+            requested.relative_to(sandbox_home)
+            if requested.is_dir():
+                cwd = requested
+        except (OSError, ValueError):
+            cwd = sandbox_home
+    # Do not load host environment files into the execution environment.
+    with open(history_file, "a", encoding="utf-8") as history:
+        history.write(f"$ {cmd}\n")
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                          timeout=60, cwd=cwd, env=env)
-        # Update cwd if it changed
-        new_cwd = os.getcwd() if cmd.startswith("cd ") else cwd
-        if new_cwd != cwd:
-            cwd_file.write_text(new_cwd)
-        # Append output to history
-        with open(history_file, "a") as f:
-            f.write((r.stdout or "") + (r.stderr or "") + "\n")
-        return f"[actor:{session} cwd={new_cwd}] exit={r.returncode}\n{(r.stdout or '')[:1500]}", r.returncode != 0
+        r = sandbox.run(["bash", "-lc", cmd], timeout=60, cwd=cwd)
+        out = (r.stdout or "") + (r.stderr or "")
+        with open(history_file, "a", encoding="utf-8") as history:
+            history.write(out + "\n")
+        return f"[actor:{session} cwd={cwd} exit={r.returncode}]\n{out[:1500]}", r.returncode != 0
     except subprocess.TimeoutExpired:
         return f"[actor:{session}] timeout after 60s", True
     except Exception as e:
