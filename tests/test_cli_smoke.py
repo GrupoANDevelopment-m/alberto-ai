@@ -6,7 +6,8 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 import pytest
 
@@ -41,7 +42,7 @@ class TestCLIAllSubcommands:
 
         proc = subprocess.run(
             [sys.executable, "-m", "alberto.cli", subcommand] + args,
-            cwd="/workspace/alberto-ai",
+            cwd=REPO_ROOT,
             capture_output=True,
             timeout=10,
             env=env,
@@ -55,7 +56,7 @@ class TestCLIAllSubcommands:
         """`alberto --help` should print available subcommands."""
         proc = subprocess.run(
             [sys.executable, "-m", "alberto.cli", "--help"],
-            cwd="/workspace/alberto-ai",
+            cwd=REPO_ROOT,
             capture_output=True,
             timeout=10,
         )
