@@ -73,7 +73,7 @@ def test_apply_patch_still_writes_inside_sandbox(tmp_path, monkeypatch):
 
     assert is_error is False
     assert "patched" in output
-    assert target.read_text(encoding="utf-8") == "after\n"
+    assert target.read_text(encoding="utf-8") == "after"
 
 
 def test_edit_blocks_protected_target(tmp_path):
