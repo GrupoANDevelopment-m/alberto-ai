@@ -741,6 +741,12 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
         return "path and patch required", True
 
     try:
+        try:
+            from .nemoclaw_real import is_protected_path
+            if is_protected_path(p_str):
+                return f"BLOCKED by NemoClaw protected-path policy: {p_str}", True
+        except ImportError:
+            pass
         safe, reason, blocked = _bridge_path_security(p_str)
         if blocked:
             return f"BLOCKED by Hermes path_security: {reason}", True
@@ -815,9 +821,15 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
                     resolved.relative_to(base_dir)
                 except ValueError as exc:
                     raise ValueError(f"patch path escapes target directory: {raw_path}") from exc
+                try:
+                    from .nemoclaw_real import is_protected_path
+                    if is_protected_path(str(resolved)):
+                        raise PermissionError(f"BLOCKED by NemoClaw protected-path policy: {resolved}")
+                except ImportError:
+                    pass
                 allowed, why, is_blocked = _bridge_path_security(str(resolved))
                 if is_blocked:
-                    raise PermissionError(f"path policy blocked {resolved}: {why}")
+                    raise PermissionError(f"BLOCKED by Hermes path policy: {resolved}: {why}")
                 return resolved
 
             def read_file_raw(self, path: str):
