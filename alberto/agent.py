@@ -356,32 +356,53 @@ class Alberto:
             )
             if m:
                 cmd_str = (m.group(1) or m.group(2) or "").strip()
-                cmd = "alberto " + cmd_str
-                # Ensure subprocess has alberto on PATH
+                from .security_whitelist import validate_alberto_subcommand
+                import shlex as _shlex
                 import os as _os_agent
-                env = _os_agent.environ.copy()
-                base_dir = str(Path(__file__).parent.parent)
-                existing_pp = env.get("PYTHONPATH", "")
-                if base_dir not in existing_pp:
-                    env["PYTHONPATH"] = f"{base_dir}:{existing_pp}" if existing_pp else base_dir
-                # If alberto CLI binary missing, fallback to python3 -m alberto.cli
                 import shutil as _shutil
-                if not _shutil.which("alberto"):
-                    # Use the full path
-                    cmd = f"{sys.executable} -m alberto.cli " + cmd_str
-                try:
-                    r = subprocess.run(cmd, shell=True, capture_output=True,
-                                      text=True, timeout=30, env=env)
-                    out = (r.stdout or "") + (r.stderr or "")
-                    exec_result = {"cmd": cmd, "rc": r.returncode, "output": out[:1500]}
+
+                is_safe, reason = validate_alberto_subcommand(cmd_str)
+                if not is_safe:
+                    exec_result = {
+                        "cmd": cmd_str,
+                        "rc": 126,
+                        "output": f"Execução automática bloqueada pela política de segurança: {reason}",
+                    }
                     tool_calls.append({"tool": "alberto_cli", "result": exec_result})
-                    response_text = (response_text + "\n\n"
-                                    f"**Execução automática** (`{cmd}`):\n"
-                                    f"```\n{out[:1500]}\n```")
-                except subprocess.TimeoutExpired:
-                    response_text += f"\n\n**Execução automática** timeout após 30s"
-                except Exception as e:
-                    response_text += f"\n\n**Execução automática** falhou: {e}"
+                    response_text += f"\n\n**Execução automática bloqueada:** {reason}"
+                else:
+                    try:
+                        cli_args = _shlex.split(cmd_str, posix=True)
+                        if not cli_args:
+                            raise ValueError("comando vazio")
+                        env = _os_agent.environ.copy()
+                        base_dir = str(Path(__file__).parent.parent)
+                        existing_pp = env.get("PYTHONPATH", "")
+                        if base_dir not in existing_pp.split(os.pathsep):
+                            env["PYTHONPATH"] = f"{base_dir}{os.pathsep}{existing_pp}" if existing_pp else base_dir
+
+                        cli_path = _shutil.which("alberto")
+                        argv = [cli_path, *cli_args] if cli_path else [sys.executable, "-m", "alberto.cli", *cli_args]
+                        r = subprocess.run(
+                            argv,
+                            shell=False,
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            env=env,
+                        )
+                        out = (r.stdout or "") + (r.stderr or "")
+                        exec_result = {"cmd": argv, "rc": r.returncode, "output": out[:1500]}
+                        tool_calls.append({"tool": "alberto_cli", "result": exec_result})
+                        response_text = (
+                            response_text + "\n\n"
+                            f"Execução automática ({_shlex.join(cli_args)}):\n"
+                            f"{out[:1500]}"
+                        )
+                    except subprocess.TimeoutExpired:
+                        response_text += "\n\nExecução automática timeout após 30s"
+                    except Exception as e:
+                        response_text += f"\n\nExecução automática falhou: {e}"
 
         conv.add("assistant", response_text)
         self.conversations.save(conv)
