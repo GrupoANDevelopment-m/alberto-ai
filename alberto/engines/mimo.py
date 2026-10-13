@@ -409,12 +409,16 @@ class MiMoEngine:
         task = kwargs.get("task", "code")
         # If real binary + session, prefer the binary
         if self._binary and task == "code":
-            sid = kwargs.get("session_id") or self.session_create().id
             try:
+                # Upstream MiMoCode exposes `mimo run [message...]`; it does
+                # not expose the assumed `exec` subcommand. The local session
+                # IDs are not upstream session IDs, so do not pass them as
+                # --session and accidentally request a nonexistent session.
                 result = subprocess.run(
-                    [self._binary, "exec", "--session", sid, prompt],
+                    [self._binary, "run", prompt],
                     capture_output=True, text=True, timeout=120,
-                    env={**os.environ, "ALBERTO_MIMO_HOME": str(self._home),
+                    env={**os.environ, "MIMOCODE_HOME": str(self._home),
+                         "ALBERTO_MIMO_HOME": str(self._home),
                          "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL", ""),
                          "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
                          "LLM_MODEL": os.environ.get("LLM_MODEL", "")},
