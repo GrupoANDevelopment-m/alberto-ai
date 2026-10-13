@@ -1284,32 +1284,54 @@ def _openrouter(alberto, args):
 
 
 def _patch_apply(alberto, args):
-    """Apply a unified diff safely."""
+    """Apply a unified diff only inside a configured sandbox workspace."""
     patch = args.get("patch", "")
     if not patch:
         return {"ok": False, "error": "missing 'patch'"}
-    mod = _try_import("patch_parser")
-    if mod is not None:
-        for fn_name in ("apply", "apply_patch"):
-            fn = getattr(mod, fn_name, None)
-            if fn:
-                try:
-                    return {"ok": True, "result": fn(patch)}
-                except Exception as e:
-                    return {"ok": False, "error": str(e)}
-    # Fallback: write to /tmp and git apply
-    tmp = Path("/tmp") / f"alberto-patch-{int(time.time()*1000)}.patch"
-    tmp.write_text(patch, encoding="utf-8")
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not all(callable(getattr(sandbox, name, None)) for name in ("home", "write", "run")):
+        return {"ok": False, "error": "a configured sandbox is required for patch application"}
+
+    import uuid
+    home = Path(sandbox.home()).resolve()
+    workspace_arg = Path(str(args.get("workspace", "."))).expanduser()
+    workspace = workspace_arg if workspace_arg.is_absolute() else home / workspace_arg
+    workspace = workspace.resolve()
     try:
-        r = subprocess.run(["git", "apply", "--check", str(tmp)],
-                          capture_output=True, text=True)
-        if r.returncode == 0:
-            r2 = subprocess.run(["git", "apply", str(tmp)], capture_output=True, text=True)
-            return {"ok": r2.returncode == 0, "stdout": r2.stdout, "stderr": r2.stderr}
-        return {"ok": False, "error": f"patch check failed: {r.stderr}"}
+        workspace.relative_to(home)
+    except ValueError:
+        return {"ok": False, "error": "patch workspace escapes sandbox home"}
+    if not sandbox.exists(workspace.relative_to(home)):
+        return {"ok": False, "error": "patch workspace does not exist inside sandbox"}
+    patch_name = f".alberto-patch-{uuid.uuid4().hex}.patch"
+    patch_path = home / patch_name
+    try:
+        sandbox.write(Path(patch_name), patch)
+        check = sandbox.run(
+            ["git", "apply", "--check", str(patch_path)],
+            timeout=30,
+            cwd=workspace,
+        )
+        if check.returncode != 0:
+            return {"ok": False, "error": f"patch check failed: {(check.stderr or check.stdout or '')[:1000]}"}
+        result = sandbox.run(
+            ["git", "apply", str(patch_path)],
+            timeout=30,
+            cwd=workspace,
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed patch application failed: {type(e).__name__}: {e}"}
     finally:
-        try: tmp.unlink()
-        except Exception: pass
+        try:
+            sandbox.run(["rm", "-f", str(patch_path)], timeout=5, cwd=home)
+        except Exception:
+            pass
 
 
 def _mimo_session(alberto, args):
