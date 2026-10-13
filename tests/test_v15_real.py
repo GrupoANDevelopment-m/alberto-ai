@@ -232,10 +232,11 @@ class TestRealHermesTools:
     def test_real_terminal_runs_command(self, tmp_path):
         """Real hermes terminal runs actual commands."""
         from alberto.engines.hermes_tools import tool_terminal
+        from alberto.sandbox.base import LocalSandbox
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+        alberto = FakeAlberto(tmp_path / "sandbox")
         result = tool_terminal(alberto, {"command": "echo hello-world-test", "timeout": 5})
         # Returns dict like {"ok": True, "stdout": "...", "stderr": "", "returncode": 0}
         assert isinstance(result, dict)
@@ -252,7 +253,7 @@ class TestRealHermesTools:
         # Write
         write_result = tool_file(alberto, {
             "action": "write",
-            "path": str(tmp_path / "real-test.txt"),
+            "path": "real-test.txt",
             "content": "real-content-12345",
         })
         # Read back
@@ -597,12 +598,20 @@ class TestRealFunctionCaller:
         # Cleanup
         del TOOL_REGISTRY["_test_real_tool"]
 
-    def test_real_run_shell(self):
-        """Real tool_run_shell executes shell."""
+    def test_real_run_shell(self, tmp_path):
+        """Shell execution requires and uses the configured sandbox."""
         from alberto.runtime.function_caller import tool_run_shell
-        out, is_err = tool_run_shell(None, {"command": "echo real-shell-test", "timeout": 5})
-        assert "real-shell-test" in out
-        assert is_err is False
+        from alberto.sandbox.base import LocalSandbox
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "shell")
+        alberto = FakeAlberto()
+        try:
+            out, is_err = tool_run_shell(alberto, {"command": "echo real-shell-test", "timeout": 5})
+            assert "real-shell-test" in out
+            assert is_err is False
+        finally:
+            alberto.sandbox.cleanup()
 
 
 # ============================================================================
