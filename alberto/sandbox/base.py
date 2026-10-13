@@ -299,8 +299,13 @@ class NemoClawSandbox:
         """Check if a path exists in the sandbox."""
         safe = self._resolve_safe(path)
         if self._mode == "docker":
-            r = self._container.exec_run(f"test -e {safe} && echo yes || echo no")
-            return b"yes" in r.output
+            result = self._container.exec_run(
+                ["test", "-e", str(safe)],
+                stdout=True,
+                stderr=True,
+                user="1000:1000",
+            )
+            return result.exit_code == 0
         return safe.exists()
 
     def cleanup(self) -> None:
