@@ -144,7 +144,7 @@ class TestNemoClawSecrets:
 
     @pytest.mark.parametrize("secret_text,expected_match", [
         # Note: regex patterns require specific formats
-        ("nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234", True),
+        ("nvapi-" + ("T" * 64), True),
         ("sk-proj-1234567890abcdefghij1234567890", True),
         ("sk-ant-api03-1234567890abcdefghij12345678", True),
         # GitHub tokens need 36+ chars after prefix
@@ -220,12 +220,11 @@ class TestNemoClawRedactSecrets:
 
     def test_redact_nvidia_key(self):
         from alberto.runtime.nemoclaw_real import redact_secrets
-        content = "Here is my key: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        test_key = "nvapi-" + ("T" * 64)
+        content = f"Here is my key: {test_key}"
         redacted, findings = redact_secrets(content)
-        # The full secret should not be in the redacted output
-        assert "nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234" not in redacted
+        assert test_key not in redacted
         assert len(findings) > 0
-        # Pattern name should be in findings
         assert any("NVIDIA" in m["pattern"] for m in findings)
 
     def test_redact_no_secrets(self):
