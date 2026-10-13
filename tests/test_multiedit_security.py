@@ -1,7 +1,7 @@
 """Regression tests for multiedit security controls."""
 from pathlib import Path
 
-from alberto.runtime.function_caller import tool_apply_patch, tool_multiedit
+from alberto.runtime.function_caller import tool_apply_patch, tool_edit, tool_multiedit
 
 
 class FakeSandbox:
@@ -74,3 +74,27 @@ def test_apply_patch_still_writes_inside_sandbox(tmp_path, monkeypatch):
     assert is_error is False
     assert "patched" in output
     assert target.read_text(encoding="utf-8") == "after\n"
+
+
+def test_edit_blocks_protected_target(tmp_path):
+    alberto = FakeAlberto(tmp_path)
+
+    output, is_error = tool_edit(
+        alberto, {"path": "/etc/passwd", "old_text": "root", "new_text": "other"}
+    )
+
+    assert is_error is True
+    assert "BLOCKED" in output or "blocked" in output.lower()
+
+
+def test_edit_still_updates_file_inside_sandbox(tmp_path):
+    alberto = FakeAlberto(tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("before", encoding="utf-8")
+
+    output, is_error = tool_edit(
+        alberto, {"path": str(target), "old_text": "before", "new_text": "after"}
+    )
+
+    assert is_error is False
+    assert target.read_text(encoding="utf-8") == "after"
