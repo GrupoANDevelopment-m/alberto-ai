@@ -14,6 +14,7 @@ Output dir: ./apps/<name>/
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,12 @@ class AppCreator:
         if output_dir is not None:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        """Create an app. Returns {path, frontend_url, backend_url, screenshot?}"""
+        # The name becomes a directory, package name, and source-code identifier.
+        # Accept a conservative slug to prevent path traversal and source injection.
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            return {"ok": False, "error": "name must be a 1-64 character slug (letters, digits, _ or -)"}
+        if not isinstance(description, str) or len(description) > 4000:
+            return {"ok": False, "error": "description must be text of at most 4000 characters"}
         app_dir = self.output_dir / name
         if app_dir.exists():
             return {"ok": False, "error": f"app {name} already exists at {app_dir}"}
@@ -137,8 +143,8 @@ export default function App() {{
   const [count, setCount] = useState(0)
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-700 text-white flex flex-col items-center justify-center p-8">
-      <h1 className="text-5xl font-bold mb-4">{name}</h1>
-      <p className="text-slate-300 mb-8 max-w-md text-center">{description}</p>
+      <h1 className="text-5xl font-bold mb-4">{{{name_literal}}}</h1>
+      <p className="text-slate-300 mb-8 max-w-md text-center">{{{description_literal}}}</p>
       <div className="bg-white/10 backdrop-blur rounded-lg p-8 flex flex-col items-center gap-4">
         <div className="text-6xl font-mono">{{count}}</div>
         <button onClick={{() => setCount(c => c + 1)}}
@@ -153,12 +159,14 @@ export default function App() {{
 """)
 
     def _scaffold_backend(self, path: Path, name: str, description: str) -> None:
-        (path / "main.py").write_text(f"""\"\"\"{name} — FastAPI backend.\"\"\"
+        name_literal = json.dumps(name)
+        description_literal = json.dumps(description)
+        (path / "main.py").write_text(f"""\"\"\"Generated FastAPI backend.\"\"\"
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="{name}", description="{description}")
+app = FastAPI(title={name_literal}, description={description_literal})
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -171,12 +179,12 @@ state = Count()
 
 @app.get("/")
 def root():
-    return {{"name": "{name}", "description": "{description}", "version": "0.1.0"}}
+    return {{"name": {name_literal}, "description": {description_literal}, "version": "0.1.0"}}
 
 
 @app.get("/api/health")
 def health():
-    return {{"ok": True, "name": "{name}"}}
+    return {{"ok": True, "name": {name_literal}}}
 
 
 @app.get("/api/count")
@@ -193,7 +201,7 @@ def increment():
         (path / "pyproject.toml").write_text(f"""[project]
 name = "{name}-backend"
 version = "0.1.0"
-description = "{description}"
+description = {description_literal}
 requires-python = ">=3.10"
 """)
 
