@@ -112,7 +112,9 @@ class SelfHealer:
                     result["actions"].append(fix_result)
                     if fix_result.get("ok"):
                         result["fixed"] = True
-                        # Don't break — apply ALL applicable fixers
+                        # Stop after the first successful repair. Applying every
+                        # matching fixer can mutate unrelated state or undo a fix.
+                        break
             except Exception as e:
                 result["actions"].append({"fix": fix.__name__, "error": str(e)})
 
