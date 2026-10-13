@@ -2,6 +2,7 @@
 import ast
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from alberto.runtime.app_creator import AppCreator
 
@@ -81,3 +82,58 @@ def test_rejects_unsupported_stack_without_creating_files(tmp_path):
     assert result["ok"] is False
     assert "unsupported stack" in result["error"]
     assert list((tmp_path / "apps").iterdir()) == []
+
+def test_run_attempts_both_services_and_reports_pids(tmp_path, monkeypatch):
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create("runnable", "test")
+    calls = []
+
+    class Process:
+        pid = 1234
+
+        def poll(self):
+            return None
+
+    def fake_run(args, **kwargs):
+        calls.append(("run", args, kwargs))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    def fake_popen(args, **kwargs):
+        calls.append(("popen", args, kwargs))
+        return Process()
+
+    monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda name: "/usr/bin/npm")
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", fake_run)
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("alberto.runtime.app_creator.time.sleep", lambda *_: None)
+
+    result = creator.run(Path(created["path"]))
+    assert result["ok"] is True
+    assert result["backend_started"] is True
+    assert result["frontend_started"] is True
+    assert result["backend_pid"] == 1234
+    assert result["frontend_pid"] == 1234
+    assert sum(1 for kind, *_ in calls if kind == "popen") == 2
+    assert any(kind == "run" and args[0] == "npm" for kind, args, _ in calls)
+
+
+def test_run_reports_missing_npm_without_claiming_full_success(tmp_path, monkeypatch):
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create("no-npm", "test")
+
+    class Process:
+        pid = 55
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda _name: None)
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stderr=""))
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", lambda *a, **k: Process())
+    monkeypatch.setattr("alberto.runtime.app_creator.time.sleep", lambda *_: None)
+
+    result = creator.run(Path(created["path"]))
+    assert result["backend_started"] is True
+    assert result["frontend_started"] is False
+    assert result["ok"] is False
+    assert result["frontend_error"] == "npm not available"
