@@ -255,9 +255,22 @@ class NemoClawSandbox:
                 raise RuntimeError(f"docker exec failed: {e}") from e
 
         shell = isinstance(cmd, str)
-        return subprocess.run(
-            cmd, shell=shell, capture_output=True, text=True, timeout=timeout, cwd=cwd,
-        )
+        try:
+            return subprocess.run(
+                cmd, shell=shell, capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            timeout_message = f"timeout after {timeout}s"
+            stderr = f"{stderr}\n{timeout_message}" if stderr else timeout_message
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=124, stdout=stdout, stderr=stderr,
+            )
 
     def write(self, path: Path, content: str) -> None:
         """Write a file inside the sandbox."""
