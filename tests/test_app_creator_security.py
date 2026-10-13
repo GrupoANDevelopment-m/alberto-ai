@@ -59,3 +59,17 @@ def test_output_dir_override_is_respected(tmp_path):
     result = creator.create("project", "desc", output_dir=target)
     assert result["ok"] is True
     assert Path(result["path"]).parent == target
+
+
+def test_generated_services_bind_to_loopback_by_default(tmp_path):
+    creator = AppCreator(tmp_path / "apps")
+    result = creator.create("local-only", "Local development")
+    root = Path(result["path"])
+    package = json.loads((root / "frontend" / "package.json").read_text())
+    compose = (root / "docker-compose.yml").read_text()
+    assert "--host 127.0.0.1" in package["scripts"]["dev"]
+    assert "127.0.0.1:3000:3000" in compose
+    assert "127.0.0.1:8000:8000" in compose
+    backend = (root / "backend" / "main.py").read_text()
+    assert 'allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"]' in backend
+    assert 'allow_origins=["*"]' not in backend
