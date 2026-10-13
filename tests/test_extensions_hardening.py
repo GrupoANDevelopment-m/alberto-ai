@@ -57,3 +57,23 @@ def test_list_enable_disable_and_uninstall_lifecycle(installer, tmp_path):
     assert installer.uninstall("sample") is True
     assert installer.uninstall("sample") is False
     assert installer.list() == []
+
+
+
+def test_registry_entries_with_traversal_are_ignored(installer, tmp_path):
+    installer.config.write_text(
+        '{"../victim": {"name": "../victim", "ext_type": "skill", "source": "x"}}'
+    )
+    fresh = ExtensionInstaller()
+    assert fresh.list() == []
+    assert fresh.uninstall("../victim") is False
+
+
+def test_extension_target_rejects_symlink_escape(installer, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = installer.home.resolve()
+    (root / "skills").mkdir(parents=True, exist_ok=True)
+    (root / "skills" / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        installer._target_for("skill", "linked")
