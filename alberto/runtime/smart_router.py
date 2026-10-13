@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -195,10 +196,20 @@ class SmartRouter:
              temperature: float, stream: bool) -> Dict[str, Any]:
         """Call a model via OpenAI-compat HTTP API."""
         import os
+        if (
+            not isinstance(spec.credential_env, str)
+            or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", spec.credential_env)
+            or not spec.credential_env.endswith(("_API_KEY", "_API_TOKEN", "_TOKEN"))
+        ):
+            raise ValueError("credential_env must name a dedicated API key/token variable")
         api_key = os.environ.get(spec.credential_env, "")
         if not api_key:
             raise RuntimeError(f"missing credential {spec.credential_env}")
         parsed = urlsplit(spec.base_url)
+        try:
+            parsed.port  # force validation of malformed ports
+        except ValueError as exc:
+            raise ValueError("provider base_url has an invalid port") from exc
         if (
             not parsed.hostname
             or parsed.username is not None
