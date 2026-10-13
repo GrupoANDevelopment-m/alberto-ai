@@ -131,6 +131,15 @@ def run_crew_squad(
     except Exception as e:
         return {"ok": False, "error": f"failed to load {workflow_yaml_path}: {e}"}
 
+    # Validate all referenced persona files before requiring credentials. This
+    # makes configuration errors deterministic and avoids needless provider setup.
+    personas_path = Path(personas_dir)
+    for persona in wf.get("personas", []):
+        persona_name = persona.get("name", "")
+        persona_file = personas_path / f"{persona_name}.md"
+        if not persona_file.is_file():
+            return {"ok": False, "error": f"persona file missing: {persona_file}"}
+
     # Build LLM
     api_key = llm_api_key or os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
