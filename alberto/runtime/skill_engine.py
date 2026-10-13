@@ -304,7 +304,9 @@ def main(argv: List[str]) -> int:
     elif args.cmd == "show":
         print(json.dumps(show_skill(args.name), indent=2, ensure_ascii=False))
     elif args.cmd == "run":
-        r = run_skill(args.name, args.args, timeout=args.timeout)
+        from alberto.sandbox.base import LocalSandbox
+        sandbox = LocalSandbox()
+        r = run_skill(args.name, args.args, sandbox=sandbox, timeout=args.timeout)
         if r.get("ok"):
             print(r.get("stdout", ""))
         else:
@@ -312,6 +314,35 @@ def main(argv: List[str]) -> int:
             if r.get("stderr"):
                 print(r["stderr"], file=sys.stderr)
         return 0 if r.get("ok") else 1
+    elif args.cmd == "run-all":
+        from alberto.sandbox.base import LocalSandbox
+        sandbox = LocalSandbox()
+        path = find_skill(args.name)
+        if not path:
+            print(f"skill '{args.name}' not found", file=sys.stderr)
+            return 1
+        content = path.read_text(encoding="utf-8", errors="replace")
+        blocks = extract_code_blocks(content)
+        executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
+        for i, block in enumerate(blocks):
+            if block["lang"] not in executable_langs:
+                continue
+            code = substitute_args(block["code"], args.args, lang=block["lang"])
+            print(f"\n--- block {i+1} ({block['lang']}) ---")
+            if block["lang"] in ("python", "python3", "py"):
+                cmd = [sys.executable, "-c", code]
+            else:
+                cmd = ["bash", "-c", code]
+            try:
+                result = sandbox.run(cmd, timeout=args.timeout, cwd=str(sandbox.home()))
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(result.stderr, end="", file=sys.stderr)
+                if result.returncode != 0:
+                    print(f"block exited with code {result.returncode}", file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                print(f"timeout after {args.timeout}s", file=sys.stderr)
     elif args.cmd == "commands":
         path = find_skill(args.name)
         if not path:
