@@ -28,9 +28,6 @@ os.chdir(REPO)
 
 ENV = os.environ.copy()
 ENV.update({
-    "NVIDIA_API_KEY": "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",
-    "NVIDIA_API_KEY_VISION": "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",
-    "NVIDIA_API_KEY_IMAGE": "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",
     "PYTHONPATH": str(REPO) + os.pathsep + ENV.get("PYTHONPATH", ""),
 })
 
@@ -96,7 +93,6 @@ def main():
     print(f"\n⏳ [2/12] CrewAI squad (engineering)...")
     try:
         sys.path.insert(0, str(REPO))
-        os.environ["NVIDIA_API_KEY"] = os.environ.get("NVIDIA_API_KEY") or "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"
         from alberto.runtime.crewai_runtime import run_crew_squad
         r = run_crew_squad(
             squad_name="engineering",
@@ -186,7 +182,6 @@ def main():
     print(f"\n⏳ [8/12] Image generation (NVIDIA diffusiongemma)...")
     try:
         sys.path.insert(0, str(REPO))
-        os.environ["NVIDIA_API_KEY"] = os.environ.get("NVIDIA_API_KEY") or "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"
         from alberto.runtime.image_gen_runtime import generate_image
         r = generate_image("a red apple on white background", style="photorealistic", size="512x512")
         is_ok = r.get("ok") is True
