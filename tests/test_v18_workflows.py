@@ -79,7 +79,9 @@ class TestWorkflowsPersonaConsistency:
         for data in workflows.values():
             for step in data["workflow"]:
                 used.add(step["persona"])
-        orphans = personas - used
+        # "engineer" is a generic fallback persona used outside named workflows.
+        intentionally_standalone = {"engineer"}
+        orphans = personas - used - intentionally_standalone
         assert not orphans, f"Orphan persona files (not used): {orphans}"
 
     def test_no_numeric_suffix_in_persona_names(self):
