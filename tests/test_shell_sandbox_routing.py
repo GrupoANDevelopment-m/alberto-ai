@@ -63,3 +63,41 @@ def test_shell_tool_fails_closed_without_sandbox(monkeypatch):
 
     assert is_error is True
     assert "sandbox is required" in output
+
+
+import pytest
+
+
+@pytest.mark.parametrize("timeout", ["not-a-number", None, 0, -1, 3601, 1.5])
+def test_run_shell_rejects_invalid_timeout_without_running(tmp_path, monkeypatch, timeout):
+    sandbox = RecordingSandbox(tmp_path)
+    output, is_error = function_caller.tool_run_shell(
+        SimpleNamespace(sandbox=sandbox),
+        {"command": "echo must-not-run", "timeout": timeout},
+    )
+    assert is_error is True
+    assert "invalid timeout" in output
+    assert sandbox.calls == []
+
+
+@pytest.mark.parametrize("timeout", ["invalid", 0, -5, 3601])
+def test_bash_rejects_invalid_timeout_without_running(tmp_path, timeout):
+    sandbox = RecordingSandbox(tmp_path)
+    output, is_error = function_caller.tool_bash(
+        SimpleNamespace(sandbox=sandbox),
+        {"command": "echo must-not-run", "timeout": timeout},
+    )
+    assert is_error is True
+    assert "invalid timeout" in output
+    assert sandbox.calls == []
+
+
+def test_shell_timeout_accepts_numeric_string(tmp_path, monkeypatch):
+    sandbox = RecordingSandbox(tmp_path)
+    monkeypatch.setattr("alberto.runtime.audit.log_event", lambda *args, **kwargs: None)
+    output, is_error = function_caller.tool_run_shell(
+        SimpleNamespace(sandbox=sandbox),
+        {"command": "echo safe", "timeout": "11"},
+    )
+    assert is_error is False
+    assert sandbox.calls[0][1] == 11
