@@ -79,7 +79,7 @@ The application must fail to initialize if Docker isolation cannot be establishe
 
 ## Test strategy
 
-The GitHub Actions workflow runs targeted suites on Python 3.11. It separates offline regressions from provider-dependent tests and runs CLI smoke checks. Tests marked as network-, LLM-, or slow-dependent are excluded from the offline regression job; therefore, a green CI run is **not** evidence that live provider integrations, browser access, or all optional features work in the deployment environment.
+The GitHub Actions workflow runs targeted suites on Python 3.11. It separates offline regressions from provider-dependent tests, runs CLI smoke checks, and supports manual runs through the Actions tab (`workflow_dispatch`). Tests marked as network-, LLM-, or slow-dependent are excluded from the offline regression job; therefore, a green CI run is **not** evidence that live provider integrations, browser access, or all optional features work in the deployment environment.
 
 Run the same principal offline regression suites locally:
 
