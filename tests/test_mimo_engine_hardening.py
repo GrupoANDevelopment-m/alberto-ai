@@ -231,3 +231,20 @@ def test_judge_fails_closed_on_malformed_json_and_substring_tricks(tmp_path):
         assert verdict["reason"] == "False"
     finally:
         engine.stop()
+
+def test_max_mode_does_not_judge_provider_error_messages(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    engine, _, _ = make_engine(tmp_path)
+    monkeypatch.setattr(engine._router, "invoke", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    judged = []
+    monkeypatch.setattr(engine, "judge", lambda candidate: judged.append(candidate) or {
+        "verdict": "pass", "score": 1.0, "reason": "should not be called"
+    })
+    try:
+        result = engine.max_mode("generate code", n=2)
+        assert result["ok"] is False
+        assert "all candidate generations failed" in result["error"]
+        assert judged == []
+    finally:
+        engine.stop()
