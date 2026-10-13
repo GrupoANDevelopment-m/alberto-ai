@@ -86,31 +86,37 @@ class MiMoEngine:
         return None
 
     def _try_build_binary(self) -> None:
-        """Build mimo binary from upstream source using bun --compile."""
-        upstream_src = upstream_path("mimo/src")
-        if not upstream_src.exists():
+        """Build MiMoCode only when the vendored source and Bun are available.
+
+        The upstream repository is a workspace monorepo; its CLI entry point is
+        packages/opencode/src/index.ts, not a top-level mimo/src/ file.
+        Dependencies are not installed automatically during agent startup.
+        """
+        upstream_root = upstream_path("mimo")
+        entrypoint = upstream_root / "packages" / "opencode" / "src" / "index.ts"
+        if not upstream_root.is_dir() or not entrypoint.is_file():
             return
         bun = shutil.which("bun")
         if not bun:
             return
-        # Real MiMo build: bun --compile (see upstream/mimo/script/build.sh)
         bin_dir = self._home / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         target = bin_dir / "mimo"
-        # Try to find the entry point
-        for entry in ("cli.ts", "main.ts", "index.ts", "cli.tsx"):
-            ep = upstream_src / entry
-            if ep.exists():
-                try:
-                    subprocess.run(
-                        [bun, "build", "--compile", str(ep), "--outfile", str(target)],
-                        timeout=180, capture_output=True,
-                    )
-                    if target.exists() and os.access(target, os.X_OK):
-                        self._binary = str(target)
-                        return
-                except Exception:
-                    pass
+        try:
+            result = subprocess.run(
+                [bun, "build", "--compile", "--conditions=browser",
+                 str(entrypoint), "--outfile", str(target)],
+                cwd=str(upstream_root),
+                timeout=180,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and target.is_file() and os.access(target, os.X_OK):
+                self._binary = str(target)
+        except (OSError, subprocess.TimeoutExpired):
+            # MiMo remains usable through the configured model-router fallback.
+            return
 
     def _init_db(self) -> None:
         """Real FTS5-backed memory."""
