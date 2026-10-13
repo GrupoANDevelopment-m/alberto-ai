@@ -26,6 +26,7 @@ Quando uma falha é detectada:
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -280,16 +281,23 @@ class SelfHealer:
             return {"fix": "memory_leak", "ok": False, "error": str(e)}
 
     def _fix_stale_lock(self, err: str, ctx: str) -> Dict[str, Any]:
+        """Remove only stale, regular lock files owned by Alberto's memory home."""
         try:
+            home = Path(self.alberto.mimo._home).resolve()
+            cutoff = time.time() - 300
             removed = []
-            for lock in self.alberto.mimo._home.rglob("*.lock"):
-                lock.unlink()
-                removed.append(str(lock))
-            # Also clear /tmp locks
-            for lock in Path("/tmp").glob("*.lock"):
-                if time.time() - lock.stat().st_mtime > 300:  # older than 5min
-                    lock.unlink()
-                    removed.append(str(lock))
+            for lock in home.rglob("*.lock"):
+                try:
+                    if lock.is_symlink() or not lock.is_file():
+                        continue
+                    resolved = lock.resolve()
+                    resolved.relative_to(home)
+                    if resolved.stat().st_mtime >= cutoff:
+                        continue
+                    resolved.unlink()
+                    removed.append(str(resolved))
+                except (OSError, ValueError):
+                    continue
             return {"fix": "stale_lock", "ok": True, "removed": removed}
         except Exception as e:
             return {"fix": "stale_lock", "ok": False, "error": str(e)}
@@ -331,12 +339,52 @@ class SelfHealer:
         return {"fix": "api_5xx", "ok": True, "action": "backoff 1s + retry"}
 
     def _fix_permission_denied(self, err: str, ctx: str) -> Dict[str, Any]:
+        """Repair permissions on one identified path inside the sandbox only."""
         try:
-            # chmod -R u+rwX on sandbox home
-            home = self.alberto.sandbox.home()
-            subprocess.run(["chmod", "-R", "u+rwX", str(home)],
-                          capture_output=True, timeout=10)
-            return {"fix": "permission_denied", "ok": True, "chmod": str(home)}
+            match = re.search(
+                r"Permission denied:\s*'([^']+)'|Permission denied:\s*\"([^\"]+)\"|Permission denied:\s*([^\s]+)",
+                err,
+                re.IGNORECASE,
+            )
+            if not match:
+                return {
+                    "fix": "permission_denied",
+                    "ok": False,
+                    "reason": "refusing recursive chmod: no specific denied path was identified",
+                }
+            raw_path = next((group for group in match.groups() if group), "")
+            sandbox = self.alberto.sandbox
+            home = Path(sandbox.home()).resolve()
+            target = Path(raw_path).expanduser()
+            if not target.is_absolute():
+                target = home / target
+            resolved = target.resolve()
+            try:
+                resolved.relative_to(home)
+            except ValueError:
+                return {
+                    "fix": "permission_denied",
+                    "ok": False,
+                    "reason": "refusing to change permissions outside sandbox home",
+                }
+            if resolved.is_symlink() or not resolved.exists():
+                return {
+                    "fix": "permission_denied",
+                    "ok": False,
+                    "reason": "denied path is missing or is a symlink",
+                }
+            result = sandbox.run(
+                ["chmod", "u+rwX", str(resolved)],
+                timeout=10,
+                cwd=str(home),
+            )
+            if result.returncode != 0:
+                return {
+                    "fix": "permission_denied",
+                    "ok": False,
+                    "error": (getattr(result, "stderr", "") or "chmod failed")[:500],
+                }
+            return {"fix": "permission_denied", "ok": True, "chmod": str(resolved)}
         except Exception as e:
             return {"fix": "permission_denied", "ok": False, "error": str(e)}
 
@@ -346,15 +394,18 @@ class SelfHealer:
                 "action": "suggested: re-run with --port 0 (auto) and --timeout 60"}
 
     def _fix_server_crash(self, err: str, ctx: str) -> Dict[str, Any]:
-        # Find and kill any alberto processes, then signal to respawn
-        try:
-            subprocess.run(["pkill", "-9", "-f", "alberto.cli serve"],
-                          capture_output=True, timeout=5)
-            time.sleep(1)
-            return {"fix": "server_crash", "ok": True,
-                    "action": "killed crashed server; respawn via alberto-serve watchdog"}
-        except Exception as e:
-            return {"fix": "server_crash", "ok": False, "error": str(e)}
+        """Delegate supervised restarts to the watchdog; never broad-kill processes."""
+        if "server_watchdog" in (ctx or ""):
+            return {
+                "fix": "server_crash",
+                "ok": True,
+                "action": "restart delegated to alberto-serve watchdog; no process-wide kill performed",
+            }
+        return {
+            "fix": "server_crash",
+            "ok": False,
+            "reason": "refusing broad pkill; restart through the supervised service/watchdog",
+        }
 
     def _fix_python_syntax(self, err: str, ctx: str) -> Dict[str, Any]:
         return {"fix": "python_syntax", "ok": False,
