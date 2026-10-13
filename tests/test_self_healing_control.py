@@ -113,6 +113,9 @@ def test_tls_recovery_never_copies_another_providers_key(monkeypatch):
 
 
 def test_tls_recovery_rotates_to_nvidia_backup_only(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("NVIDIA_API_KEY_"):
+            monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-current-test-key")
     monkeypatch.setenv("NVIDIA_API_KEY_BACKUP", "nvidia-backup-test-key")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-other-test-key")
