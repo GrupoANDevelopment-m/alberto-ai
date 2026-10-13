@@ -47,7 +47,9 @@ class AppTester:
             out["tests"].append(test)
         out["passed"] = sum(1 for t in out["tests"] if t.get("ok"))
         out["failed"] = sum(1 for t in out["tests"] if not t.get("ok"))
-        out["ok"] = out["failed"] == 0
+        out["ok"] = bool(out["tests"]) and out["failed"] == 0
+        if not out["tests"]:
+            out["error"] = "no backend or frontend directory to test"
         return out
 
     def perf(self, endpoint: str = "/", *, n_requests: int = 50,
