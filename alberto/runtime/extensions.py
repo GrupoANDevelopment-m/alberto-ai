@@ -63,8 +63,20 @@ class ExtensionInstaller:
         if self.config.exists():
             try:
                 data = json.loads(self.config.read_text())
+                if not isinstance(data, dict):
+                    return
                 for name, d in data.items():
-                    self.extensions[name] = Extension(**d)
+                    try:
+                        ext = Extension(**d)
+                        _validate_path_component(name, "extension name")
+                        _validate_path_component(ext.name, "extension name")
+                        if name != ext.name or ext.ext_type not in EXT_TYPES:
+                            continue
+                        self._target_for(ext.ext_type, ext.name)
+                        self.extensions[name] = ext
+                    except (TypeError, ValueError):
+                        # Ignore malformed or path-escaping registry entries.
+                        continue
             except Exception:
                 pass
         else:
@@ -73,6 +85,17 @@ class ExtensionInstaller:
     def _save(self) -> None:
         data = {name: ext.__dict__ for name, ext in self.extensions.items()}
         self.config.write_text(json.dumps(data, indent=2, default=str))
+
+    def _target_for(self, ext_type: str, name: str) -> Path:
+        """Resolve an extension target and guarantee it remains under the install root."""
+        if ext_type not in EXT_TYPES:
+            raise ValueError(f"unsupported extension type: {ext_type}")
+        name = _validate_path_component(name, "extension name")
+        root = self.home.resolve()
+        target = (root / f"{ext_type}s" / name).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError("extension target escapes the install directory")
+        return target
 
     def list(self, ext_type: Optional[str] = None) -> List[Extension]:
         exts = list(self.extensions.values())
@@ -96,7 +119,7 @@ class ExtensionInstaller:
             name=name, ext_type=ext_type, version=version,
             source=source, description=description, installed_at=time.time(),
         )
-        target = self.home / f"{ext_type}s" / name
+        target = self._target_for(ext_type, name)
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if source.startswith("/") or source.startswith("."):
@@ -138,7 +161,10 @@ class ExtensionInstaller:
         ext = self.extensions.get(name)
         if not ext:
             return False
-        target = self.home / f"{ext.ext_type}s" / name
+        try:
+            target = self._target_for(ext.ext_type, ext.name)
+        except ValueError:
+            return False
         if target.exists():
             shutil.rmtree(target)
         del self.extensions[name]
