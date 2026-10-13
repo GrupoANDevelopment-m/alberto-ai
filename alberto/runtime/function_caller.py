@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import shlex
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -264,15 +265,27 @@ def tool_alberto_cli(alberto, args: Dict) -> Tuple[str, bool]:
     if not cmd_str:
         return "no args", True
     try:
-        # Build env with PYTHONPATH
+        # Only allow explicitly safe CLI subcommands when invoked by the agent.
+        from alberto.security_whitelist import validate_alberto_subcommand
+        is_safe, reason = validate_alberto_subcommand(cmd_str)
+        if not is_safe:
+            return f"BLOCKED by Alberto security: {reason}", True
+        try:
+            cli_args = shlex.split(cmd_str)
+        except ValueError as e:
+            return f"invalid CLI argument quoting: {e}", True
+        if not cli_args:
+            return "no args", True
+        # Build env with PYTHONPATH; pass argv directly so shell metacharacters
+        # are data, never command separators or substitutions.
         env = os.environ.copy()
         base_dir = str(Path(__file__).parent.parent.parent)
         existing_pp = env.get("PYTHONPATH", "")
         if base_dir not in existing_pp:
             env["PYTHONPATH"] = f"{base_dir}:{existing_pp}" if existing_pp else base_dir
-        full_cmd = f"{sys.executable} -m alberto.cli {cmd_str}"
-        r = subprocess.run(full_cmd, shell=True, capture_output=True, text=True,
-                          timeout=120, env=env)
+        full_cmd = [sys.executable, "-m", "alberto.cli", *cli_args]
+        r = subprocess.run(full_cmd, shell=False, capture_output=True, text=True,
+                           timeout=120, env=env)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
