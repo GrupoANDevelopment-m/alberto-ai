@@ -97,7 +97,7 @@ def test_run_aiox_workflow_never_reports_skipped_steps_as_success():
     result = integration.run_aiox_workflow(workflows[0], None)
     assert result["ok"] is False
     assert result["status"] == "not_executed"
-    assert result["workflow"].endswith((".yaml", ".yml"))
+    assert result["workflow"] == __import__("pathlib").Path(workflows[0]).stem
     assert "not executed" in result["error"].lower()
     assert all(step["status"] == "not_executed" for step in result["steps"])
 
