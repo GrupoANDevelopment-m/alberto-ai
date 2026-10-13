@@ -172,6 +172,5 @@ def test_nemoclaw_run_timeout_returns_completed_process():
     try:
         result = sb.run(["python3", "-c", "import time; time.sleep(2)"], timeout=1)
         assert result.returncode == 124
-        assert "timeout after 1s" in result.stderr or result.returncode == 124
     finally:
         sb.cleanup()
