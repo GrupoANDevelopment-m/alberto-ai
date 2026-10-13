@@ -23,6 +23,8 @@ APP_VERSION = "1.8.0"
 import asyncio
 import json
 import os
+import hmac
+import logging
 from pathlib import Path
 from typing import Optional, List
 
@@ -97,8 +99,44 @@ def create_app(alberto: Optional[Alberto] = None,
         frontend_dir = Path(__file__).parent.parent.parent / "frontend"
     frontend_dir = Path(frontend_dir)  # ensure Path
 
-    app = FastAPI(title=NAME, version=VERSION, docs_url="/__docs")
+    production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+    api_token = os.environ.get("ALBERTO_API_TOKEN", "")
+    if production and len(api_token) < 32:
+        raise RuntimeError(
+            "production mode requires ALBERTO_API_TOKEN with at least 32 characters"
+        )
+
+    app = FastAPI(
+        title=NAME,
+        version=VERSION,
+        docs_url=None if production else "/__docs",
+        redoc_url=None if production else "/__redoc",
+        openapi_url=None if production else "/openapi.json",
+    )
     app.state.alberto = alberto
+
+    @app.middleware("http")
+    async def require_api_auth(request: Request, call_next):
+        protected_path = (
+            request.url.path.startswith("/api/")
+            or request.url.path in {"/__docs", "/__redoc", "/openapi.json"}
+        )
+        token = os.environ.get("ALBERTO_API_TOKEN", "")
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        if protected_path and (token or is_production):
+            authorization = request.headers.get("authorization", "")
+            scheme, separator, supplied = authorization.partition(" ")
+            if (
+                not separator
+                or scheme.lower() != "bearer"
+                or not hmac.compare_digest(supplied, token)
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "authentication required"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        return await call_next(request)
 
     # ===== Frontend =====
     @app.get("/", response_class=FileResponse)
@@ -296,6 +334,15 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.exception_handler(Exception)
     async def all_exception_handler(request: Request, exc: Exception):
+        logging.getLogger("alberto.server").exception(
+            "Unhandled request exception for %s %s", request.method, request.url.path
+        )
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        if is_production:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "internal server error"},
+            )
         return JSONResponse(
             status_code=500,
             content={"error": str(exc), "type": type(exc).__name__},
