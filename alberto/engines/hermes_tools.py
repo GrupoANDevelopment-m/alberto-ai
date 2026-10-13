@@ -142,60 +142,68 @@ def tool_browser(alberto, args):
 
 
 def tool_code_execution(alberto, args):
-    """Real Hermes code execution (PTC with UDS RPC)."""
+    """Execute Python only through Alberto's configured sandbox."""
     code = args.get("code", "")
     if not code:
         return {"ok": False, "error": "missing 'code'"}
-    mod = _try_import("code_execution_tool")
-    if mod is not None:
-        for fn_name in ("execute_python", "run_python", "execute", "run"):
-            fn = getattr(mod, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                result = fn(code, language=args.get("language", "python"), timeout=args.get("timeout", 60))
-                if isinstance(result, dict):
-                    return {"ok": True, **result}
-                return {"ok": True, "stdout": str(result), "stderr": "", "returncode": 0}
-            except Exception as e:
-                return {"ok": False, "error": f"code_execution_tool.{fn_name}: {e}"}
-    # Fallback: subprocess
-    tmp = Path("/tmp") / f"alberto-{int(time.time()*1000)}.py"
-    tmp.write_text(code, encoding="utf-8")
+    language = str(args.get("language", "python")).strip().lower()
+    if language not in ("python", "python3", "py"):
+        return {"ok": False, "error": "only Python execution is supported by the sandboxed code tool"}
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "write", None)) or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "a configured sandbox is required for code execution"}
+
+    import uuid
+    timeout = max(1, min(int(args.get("timeout", 60)), 120))
+    filename = f".alberto-code-{uuid.uuid4().hex}.py"
+    relative_path = Path(filename)
+    file_path = Path(sandbox.home()) / filename
     try:
-        r = subprocess.run(["python3", str(tmp)], capture_output=True, text=True,
-                          timeout=args.get("timeout", 60))
-        return {"ok": True, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+        sandbox.write(relative_path, code)
+        python_executable = "python3" if getattr(sandbox, "_mode", None) == "docker" else sys.executable
+        result = sandbox.run(
+            [python_executable, str(file_path)],
+            timeout=timeout,
+            cwd=sandbox.home(),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed code execution failed: {type(e).__name__}: {e}"}
     finally:
-        try: tmp.unlink()
-        except Exception: pass
+        try:
+            sandbox.run(["rm", "-f", str(file_path)], timeout=5, cwd=sandbox.home())
+        except Exception:
+            pass
 
 
 def tool_terminal(alberto, args):
-    """Real Hermes terminal — shell command execution."""
+    """Execute a terminal command only through Alberto's configured sandbox."""
     cmd = args.get("command", "")
-    if not cmd:
+    if not isinstance(cmd, str) or not cmd.strip():
         return {"ok": False, "error": "missing 'command'"}
-    mod = _try_import("terminal_tool")
-    if mod is not None:
-        for fn_name in ("run", "execute", "shell", "terminal"):
-            fn = getattr(mod, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                result = fn(cmd, timeout=args.get("timeout", 60))
-                if isinstance(result, dict):
-                    return {"ok": True, **result}
-                return {"ok": True, "output": str(result)}
-            except Exception as e:
-                return {"ok": False, "error": f"terminal_tool.{fn_name}: {e}"}
-    # Fallback: subprocess
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "a configured sandbox is required for terminal execution"}
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                          timeout=args.get("timeout", 60))
-        return {"ok": True, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout"}
+        timeout = max(1, min(int(args.get("timeout", 60)), 120))
+        result = sandbox.run(
+            ["bash", "-lc", cmd],
+            timeout=timeout,
+            cwd=sandbox.home(),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed terminal execution failed: {type(e).__name__}: {e}"}
 
 
 def tool_mcp(alberto, args):
