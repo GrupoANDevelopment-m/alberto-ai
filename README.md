@@ -86,21 +86,21 @@ Run the same principal offline regression suites locally:
 ```bash
 export ALBERTO_OFFLINE=1
 unset NVIDIA_API_KEY OPENAI_API_KEY
-python -m pytest \\
-  tests/test_v15_unit.py \\
-  tests/test_v15_components.py \\
-  tests/test_v17_security.py \\
-  tests/test_file_read_security.py \\
-  tests/test_self_healing_control.py \\
-  tests/test_self_healing_safety.py \\
-  tests/test_multiedit_security.py \\
-  tests/test_alberto_cli_tool_security.py \\
-  tests/test_v184_sandbox.py \\
-  tests/test_skill_execution_security.py \\
-  tests/test_webfetch_ssrf.py \\
-  tests/test_shell_sandbox_routing.py \\
-  tests/test_hermes_sandbox_routing.py \\
-  tests/test_benchmark_alberto.py \\
+python -m pytest \
+  tests/test_v15_unit.py \
+  tests/test_v15_components.py \
+  tests/test_v17_security.py \
+  tests/test_file_read_security.py \
+  tests/test_self_healing_control.py \
+  tests/test_self_healing_safety.py \
+  tests/test_multiedit_security.py \
+  tests/test_alberto_cli_tool_security.py \
+  tests/test_v184_sandbox.py \
+  tests/test_skill_execution_security.py \
+  tests/test_webfetch_ssrf.py \
+  tests/test_shell_sandbox_routing.py \
+  tests/test_hermes_sandbox_routing.py \
+  tests/test_benchmark_alberto.py \
   tests/test_no_embedded_credentials.py -v --tb=short
 
 python -m pytest tests/test_cli_smoke.py -v --tb=short
