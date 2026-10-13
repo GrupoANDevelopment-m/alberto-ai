@@ -108,6 +108,11 @@ def tool_browser(alberto, args):
     url = args.get("url", "")
     if not url:
         return {"ok": False, "error": "missing 'url'"}
+    try:
+        from ..runtime.function_caller import _validate_public_web_url, _SafeWebRedirectHandler
+        _validate_public_web_url(url)
+    except Exception as e:
+        return {"ok": False, "error": f"blocked unsafe browser URL: {e}", "url": url}
     # Try real upstream browser_tool (camofox)
     mod = _try_import("browser_tool")
     if mod is not None:
@@ -128,7 +133,11 @@ def tool_browser(alberto, args):
     try:
         ctx = ssl.create_default_context()
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=ctx),
+            _SafeWebRedirectHandler(),
+        )
+        with opener.open(req, timeout=30) as resp:
             data = resp.read(5 * 1024 * 1024).decode("utf-8", errors="replace")
         text = re.sub(r"<script.*?</script>", "", data, flags=re.S | re.I)
         text = re.sub(r"<style.*?</style>", "", text, flags=re.S | re.I)
