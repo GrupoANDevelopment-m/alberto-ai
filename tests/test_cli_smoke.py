@@ -56,7 +56,7 @@ class TestCLIAllSubcommands:
         """`alberto --help` should print available subcommands."""
         proc = subprocess.run(
             [sys.executable, "-m", "alberto.cli", "--help"],
-            cwd="/workspace/alberto-ai",
+            cwd=REPO_ROOT,
             capture_output=True,
             timeout=10,
         )
