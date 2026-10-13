@@ -25,10 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Real API setup
 # ============================================================================
 
-NVIDIA_KEY = os.environ.get(
-    "NVIDIA_API_KEY",
-    "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"  # working key
-)
+NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
 
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 NVIDIA_GENAI = "https://ai.api.nvidia.com/v1/genai"
@@ -164,7 +161,7 @@ class TestRealToolCalling:
 class TestRealImageGeneration:
     """Real image generation via the Qwen image key."""
 
-    QWEN_KEY = "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"
+    QWEN_KEY = os.environ.get("QWEN_KEY", "")
 
     @pytest.mark.skipif(
         not os.environ.get("QWEN_KEY"),
@@ -298,7 +295,7 @@ class TestRealNemoClawSecurity:
     def test_scan_secrets_real(self):
         """Real scan_secrets catches real secrets."""
         from alberto.runtime.nemoclaw_real import scan_secrets
-        text = "API key: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        text = "API key: " + "nvapi-" + ("T" * 64)
         findings = scan_secrets(text)
         assert len(findings) > 0
         assert any("NVIDIA" in f["pattern"] for f in findings)
@@ -313,10 +310,10 @@ class TestRealNemoClawSecurity:
     def test_redact_secrets_real(self):
         """Real redact_secrets actually redacts."""
         from alberto.runtime.nemoclaw_real import redact_secrets
-        text = "secret: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        text = "secret: " + "nvapi-" + ("T" * 64)
         redacted, findings = redact_secrets(text)
         # The full secret must NOT be in redacted output
-        assert "nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234" not in redacted
+        assert ("nvapi-" + ("T" * 64)) not in redacted
         assert len(findings) > 0
 
     def test_env_leak_real(self):
