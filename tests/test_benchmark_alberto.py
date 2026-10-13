@@ -47,3 +47,21 @@ def test_summary_metrics_use_recorded_values():
     assert summary["errors"] == 1
     assert summary["median_latency_ms"] == 200.0
     assert summary["p95_latency_ms"] == 300.0
+
+
+
+def test_provider_error_fallback_is_not_counted_as_model_response():
+    from scripts.benchmark_alberto import is_model_response
+
+    assert is_model_response(
+        "[sem modelo configurado pra task=chat: provider unavailable]",
+        {"mode": "direct"},
+    ) is False
+
+
+def test_real_model_response_requires_strategy_and_no_error():
+    from scripts.benchmark_alberto import is_model_response
+
+    assert is_model_response("READY", {"mode": "direct"}) is True
+    assert is_model_response("READY", {"mode": "direct"}, "provider timeout") is False
+    assert is_model_response("READY", None) is False
