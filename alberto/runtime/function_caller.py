@@ -583,7 +583,16 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
     if not path or not edits:
         return "path and edits required", True
     try:
-        p = Path(path).expanduser()
+        # Validate the target before reading it, then re-check the final content
+        # before writing. This keeps multiedit aligned with the protected write tools.
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {safe_path}", True
+            p = Path(safe_path).expanduser()
+        except ImportError:
+            p = Path(path).expanduser()
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
@@ -594,8 +603,17 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
             if old and old in content:
                 content = content.replace(old, new, 1)
                 applied += 1
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), content)
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {final_path}", True
+            p = Path(final_path).expanduser()
+            content = final_content
+        except ImportError:
+            pass
         p.write_text(content)
-        return f"applied {applied}/{len(edits)} edits to {path}", applied != len(edits)
+        return f"applied {applied}/{len(edits)} edits to {p}", applied != len(edits)
     except Exception as e:
         return f"error: {e}", True
 
