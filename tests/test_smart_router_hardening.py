@@ -216,3 +216,18 @@ def test_call_rejects_loopback_http_in_production(tmp_path, monkeypatch):
             provider="test", model_id="model", base_url="http://127.0.0.1:8080/v1",
             credential_env="TEST_API_KEY",
         ), [], 10, 0.0, False)
+
+
+
+def test_call_rejects_general_host_secrets_as_provider_credentials(tmp_path, monkeypatch):
+    r = router(tmp_path)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "sensitive-value")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: pytest.fail("non-provider secret must never be sent"),
+    )
+    with pytest.raises(ValueError, match="dedicated API key/token"):
+        r._call(ModelSpec(
+            provider="test", model_id="model", base_url="https://provider.invalid/v1",
+            credential_env="AWS_SECRET_ACCESS_KEY",
+        ), [], 10, 0.0, False)
