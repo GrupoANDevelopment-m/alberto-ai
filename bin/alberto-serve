@@ -246,14 +246,17 @@ def main():
     xdg_pidfile = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "alberto-serve.pid"
     pidfile = xdg_pidfile if xdg_pidfile.parent.exists() else user_pidfile
     if check_lock(pidfile):
-        print(f"[alberto-serve] another instance is running (PID file {pidfile}). "
-              f"Use --kill-existing to force.", file=sys.stderr, flush=True)
-        sys.exit(2)
-
-    # Step 2: kill existing
-    if args.kill_existing:
-        print("[alberto-serve] killing existing alberto serves...", flush=True)
-        kill_alberto_serves()
+        if not args.kill_existing:
+            print(f"[alberto-serve] another instance is running (PID file {pidfile}). "
+                  "Use --kill-existing only after verifying the recorded process.",
+                  file=sys.stderr, flush=True)
+            sys.exit(2)
+        print("[alberto-serve] stopping the recorded Alberto server...", flush=True)
+        try:
+            kill_alberto_serves(pidfile)
+        except RuntimeError as exc:
+            print(f"[alberto-serve] {exc}", file=sys.stderr, flush=True)
+            sys.exit(2)
 
     # Step 3: preflight
     if not args.no_preflight:
