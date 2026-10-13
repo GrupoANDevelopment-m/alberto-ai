@@ -43,7 +43,7 @@ def alberto():
 # ===== Identity =====
 def test_identity():
     assert NAME == "Alberto AI"
-    assert VERSION == "1.0.0"
+    assert VERSION == "1.8.4"
     assert "Alberto" in get_banner()
 
 
