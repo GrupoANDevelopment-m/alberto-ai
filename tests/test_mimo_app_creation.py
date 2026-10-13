@@ -49,7 +49,7 @@ def test_mimo_app_create_fails_closed_if_planning_step_fails(tmp_path):
     alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
     result = _mimo_app_create(alberto, {"name": "must-not-exist", "spec": "A test app"})
     assert result["ok"] is False
-    assert result["failed_steps"] == ["tdd"]
+    assert result["failed_steps"] == ["tdd", "review"]
     assert not (home / "apps" / "must-not-exist").exists()
 
 
