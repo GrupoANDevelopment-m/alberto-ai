@@ -126,6 +126,7 @@ class NemoClawSandbox:
 
     def __init__(self, sandbox_name: str = "alberto-ai"):
         self.sandbox_name = sandbox_name
+        require_docker = os.environ.get("ALBERTO_REQUIRE_DOCKER", "").strip().lower() in ("1", "true", "yes", "on")
         import uuid as _uuid
         self._id = _uuid.uuid4().hex[:12]
         # Try Docker first
@@ -137,7 +138,13 @@ class NemoClawSandbox:
                 return
             except Exception as e:
                 sys.stderr.write(f"[NemoClawSandbox] Docker init failed: {e}\n")
+                if require_docker:
+                    raise RuntimeError("ALBERTO_REQUIRE_DOCKER is enabled but Docker isolation could not be initialized") from e
+        elif require_docker:
+            raise RuntimeError("ALBERTO_REQUIRE_DOCKER is enabled but Docker is unavailable; refusing host execution")
         # Compatibility fallback: commands execute on the host, not in a container.
+        if require_docker:
+            raise RuntimeError("ALBERTO_REQUIRE_DOCKER is enabled; host fallback is forbidden")
         self._init_host_fallback()
         self._mode = "host-fallback"
         self.isolation_level = "host-process"
