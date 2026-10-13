@@ -83,11 +83,12 @@ def check_lock(pidfile: Path) -> bool:
     if (
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.getuid()
-        or info.st_mode & 0o077
     ):
-        print(f"[alberto-serve] unsafe PID file permissions/ownership: {pidfile}",
+        print(f"[alberto-serve] unsafe PID file type/ownership: {pidfile}",
               file=sys.stderr, flush=True)
         return True
+    if info.st_mode & 0o077:
+        os.chmod(pidfile, 0o600)
     try:
         pid = int(pidfile.read_text().strip())
         os.kill(pid, 0)
@@ -119,9 +120,10 @@ def kill_alberto_serves(pidfile: Path):
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_mode & 0o077
         ):
-            raise RuntimeError("unsafe PID file permissions/ownership; refusing to kill a process")
+            raise RuntimeError("unsafe PID file type/ownership; refusing to kill a process")
+        if info.st_mode & 0o077:
+            os.chmod(pidfile, 0o600)
         pid = int(pidfile.read_text().strip())
     except (OSError, ValueError):
         pidfile.unlink(missing_ok=True)
