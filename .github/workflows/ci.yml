@@ -37,7 +37,7 @@ jobs:
           NVIDIA_API_KEY: "test-key-disabled"
           ALBERTO_OFFLINE: "1"
         run: |
-          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py -v --tb=short
+          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_multiedit_security.py -v --tb=short
 
       - name: Run CLI smoke tests
         run: |
@@ -45,7 +45,7 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          python -m pytest tests/test_v15_unit.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py \
+          python -m pytest tests/test_v15_unit.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_multiedit_security.py \
             --cov=alberto --cov-report=term --cov-report=xml
 
       - name: Upload coverage to Codecov
