@@ -130,3 +130,26 @@ def test_file_tool_reads_and_writes_only_inside_sandbox(tmp_path, monkeypatch):
     assert read_result == {"ok": True, "content": "hello"}
     assert blocked["ok"] is False
     assert "escapes sandbox" in blocked["error"]
+
+
+def test_patch_apply_refuses_workspace_outside_sandbox(tmp_path):
+    sandbox = RecordingSandbox(tmp_path / "sandbox")
+    (tmp_path / "sandbox").mkdir()
+    outside = tmp_path / "repo"
+    outside.mkdir()
+
+    result = hermes_tools._patch_apply(
+        SimpleNamespace(sandbox=sandbox),
+        {"patch": "diff --git a/a b/a", "workspace": str(outside)},
+    )
+
+    assert result["ok"] is False
+    assert "escapes sandbox" in result["error"]
+    assert sandbox.calls == []
+
+
+def test_patch_apply_requires_configured_sandbox():
+    result = hermes_tools._patch_apply(SimpleNamespace(), {"patch": "diff --git a/a b/a"})
+
+    assert result["ok"] is False
+    assert "sandbox is required" in result["error"]
