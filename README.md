@@ -96,6 +96,7 @@ python -m pytest \
   tests/test_multiedit_security.py \
   tests/test_alberto_cli_tool_security.py \
   tests/test_v184_sandbox.py \
+  tests/test_sandbox_config.py \
   tests/test_skill_execution_security.py \
   tests/test_webfetch_ssrf.py \
   tests/test_shell_sandbox_routing.py \
