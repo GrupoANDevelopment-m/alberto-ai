@@ -46,7 +46,17 @@ Start the HTTP interface when needed:
 alberto-serve --host 127.0.0.1 --port 8741
 ```
 
-Keep the server bound to localhost during development. Before remote deployment, configure authentication, network ingress, secrets, logging, and a hardened execution environment; do not assume the development server is safe to expose publicly.
+Keep the server bound to localhost during development. Production mode now refuses to start without a strong API token, requires a Bearer token on API routes, disables interactive API documentation, and redacts unhandled exception details from HTTP responses. This is a baseline control, not a substitute for TLS, a reverse proxy, rate limiting, network policy, or external security review.
+
+For a production-mode local service, set a cryptographically random token (at least 32 characters) and keep it in a secrets manager or protected environment file:
+
+```bash
+export ALBERTO_ENV=production
+export ALBERTO_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+alberto-serve --host 127.0.0.1 --port 8741
+```
+
+Clients must send `Authorization: Bearer <ALBERTO_API_TOKEN>` on `/api/*` requests. Put the service behind a TLS-terminating reverse proxy before remote access. The watchdog launcher now defaults to loopback; explicitly binding it to a public interface should only happen behind a reviewed ingress/proxy and firewall policy. The token must never be committed to the repository or written to logs.
 
 ## Sandbox and execution safety
 
@@ -128,8 +138,9 @@ For a more stable comparison, run multiple repeats under the same provider, mode
 
 - Latest verified CI baseline on Python 3.11: **662 passed, 2 skipped, 7 deselected** in the expanded coverage job; CLI and additional regression suites also completed successfully in that run. Coverage measured **38% combined line/branch coverage** across `alberto/` (7,765 statements; 4,504 missed; 2,522 branches; 276 partial branches). This is not directly comparable to the older **28% line-only** baseline. The Codecov upload was rate-limited (HTTP 429), but the local CI coverage report and `coverage.xml` were generated successfully. See [CI run 38473497529](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38473497529). Coverage remains below the 50% target; new hardening tests are being added, and the next CI run must confirm their effect before the metric is revised.
 - The CI suite deliberately skips or deselects provider/network-dependent tests. Those integrations require separate, credentialed end-to-end verification.
-- Security changes include fail-closed shell execution when no sandbox is configured, sandbox-confined directory changes, safer patch application, sandbox-backed skill execution, SSRF-focused URL checks, enforcement of `ALBERTO_REQUIRE_DOCKER` at agent initialization, and path-component/root confinement for extension installation, registry loading, uninstall, and skill creation. AIOX workflows now explicitly report `not_executed` rather than falsely returning success when steps were skipped.
-- The app performance tester now rejects invalid request/concurrency inputs, refuses non-local endpoint forms, and reports request failures as a failed benchmark instead of a false success. Regression coverage for these paths is in the hardening branch and awaits the next completed CI run.
+- Security changes include fail-closed shell execution when no sandbox is configured, sandbox-confined directory changes, safer patch application, sandbox-backed skill execution, SSRF-focused URL checks, enforcement of `ALBERTO_REQUIRE_DOCKER` at agent initialization, path confinement for extension installation/registry/uninstall/skill creation, rejection of built-in skill source traversal and plaintext HTTP Git sources, and production-mode API authentication with error redaction.
+- The app performance tester now rejects invalid request/concurrency inputs, refuses non-local endpoint forms, and reports request failures as a failed benchmark instead of a false success. The watchdog server launcher defaults to loopback and sends the configured API token on its local health checks.
+- The latest pre-API-hardening run passed the selected CI suites; the new production API tests and extension-source tests have not yet been validated by a completed CI run. Coverage remains 38% combined line/branch on the last verified measurement and must be remeasured.
 - These changes reduce specific risks; they do not prove the absence of vulnerabilities. The default `local` sandbox remains a host-process mode unless Docker-required mode is explicitly enabled.
 
 ## Repository map
