@@ -65,3 +65,35 @@ def test_real_model_response_requires_strategy_and_no_error():
     assert is_model_response("READY", {"mode": "direct"}) is True
     assert is_model_response("READY", {"mode": "direct"}, "provider timeout") is False
     assert is_model_response("READY", None) is False
+
+
+
+def test_benchmark_records_provider_fallback_as_error_not_model_quality(monkeypatch):
+    from types import SimpleNamespace
+    import alberto
+    from scripts.benchmark_alberto import run_benchmark
+
+    class FakeAgent:
+        version = "test"
+        sandbox = SimpleNamespace(isolation_level="host-process")
+        router = SimpleNamespace(list_tasks=lambda: ["chat"])
+        conversations = SimpleNamespace(create=lambda: SimpleNamespace(id="test-conversation"))
+
+        def chat(self, prompt, *, conversation_id=None):
+            return {
+                "response": "[sem modelo configurado pra task=chat: provider offline]",
+                "strategy": {"mode": "direct"},
+                "tool_calls": [],
+            }
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(alberto, "Alberto", FakeAgent)
+    report = run_benchmark(repeats=1, pause_seconds=0)
+
+    assert report["metrics"]["cases"] == len(TASKS)
+    assert report["metrics"]["passed"] == 0
+    assert report["metrics"]["errors"] == len(TASKS)
+    assert all(item["model_used"] is False for item in report["results"])
+    assert all(item["error"].startswith("[sem modelo configurado") for item in report["results"])
