@@ -7,7 +7,7 @@ import pytest
 from alberto.runtime.tester import AppTester
 
 
-def tester(tmp_path):
+def make_make_tester(tmp_path):
     app = tmp_path / "app"
     app.mkdir()
     return AppTester(app)
@@ -28,7 +28,7 @@ def tester(tmp_path):
 def test_perf_rejects_invalid_inputs_without_starting_process(
     tmp_path, monkeypatch, endpoint, n_requests, concurrency, expected
 ):
-    t = tester(tmp_path)
+    t = make_tester(tmp_path)
     (t.app_dir / "backend").mkdir()
     monkeypatch.setattr(
         "alberto.runtime.tester.subprocess.Popen",
@@ -40,21 +40,21 @@ def test_perf_rejects_invalid_inputs_without_starting_process(
 
 
 def test_smoke_fails_when_app_has_no_testable_components(tmp_path):
-    result = tester(tmp_path).smoke()
+    result = make_tester(tmp_path).smoke()
     assert result["ok"] is False
     assert result["failed"] == 0
     assert "no backend or frontend" in result["error"]
 
 
 def test_percentile_handles_empty_and_nonempty_samples(tmp_path):
-    t = tester(tmp_path)
+    t = make_tester(tmp_path)
     assert t._percentile([], 95) == 0.0
     assert t._percentile([10, 30, 20], 50) == 20
     assert t._percentile([10, 30, 20], 95) == 30
 
 
 def test_perf_reports_request_failures_as_failed_benchmark(tmp_path, monkeypatch):
-    t = tester(tmp_path)
+    t = make_tester(tmp_path)
     (t.app_dir / "backend").mkdir()
 
     class Process:
@@ -86,7 +86,7 @@ def test_perf_reports_request_failures_as_failed_benchmark(tmp_path, monkeypatch
 
 
 def test_perf_reports_successful_requests_and_percentiles(tmp_path, monkeypatch):
-    t = tester(tmp_path)
+    t = make_tester(tmp_path)
     (t.app_dir / "backend").mkdir()
 
     class Process:
