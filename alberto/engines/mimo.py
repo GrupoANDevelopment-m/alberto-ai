@@ -19,6 +19,7 @@ Compose: real spec → tdd → review pipeline.
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -258,6 +259,8 @@ class MiMoEngine:
 
     # ===== Max mode (best-of-N) =====
     def max_mode(self, prompt: str, *, n: int = 3) -> Dict:
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 8:
+            return {"ok": False, "error": "n must be an integer between 1 and 8"}
         with ThreadPoolExecutor(max_workers=n) as ex:
             futures = [ex.submit(self._router.invoke, "code", [
                 {"role": "user", "content": prompt},
@@ -284,10 +287,11 @@ class MiMoEngine:
         for step in steps:
             prompt = f"[compose step: {step}]\nSpec:\n{spec}\n\nPrevious outputs:\n{prev}"
             try:
-                resp = self._router.invoke("code", [
-                    {"role": "user", "content": prompt},
-                ], max_tokens=2048, temperature=0.3)
-                prev = resp["choices"][0]["message"]["content"]
+                # Use MiMoEngine.invoke so a configured real MiMo CLI is used;
+                # its model-router fallback remains available when no binary exists.
+                prev = self.invoke(prompt, task="code", max_tokens=2048, temperature=0.3)
+                if not isinstance(prev, str) or not prev.strip():
+                    raise RuntimeError("MiMo returned an empty compose result")
                 results[step] = {"content": prev, "verdict": self.judge(prev)}
             except Exception as e:
                 results[step] = {"content": f"[error] {e}", "verdict": {"verdict": "fail"}}
@@ -295,6 +299,8 @@ class MiMoEngine:
 
     # ===== Subagents (parallel sessions) =====
     def subagent(self, prompt: str, *, count: int = 3) -> List[Dict]:
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 8:
+            return [{"ok": False, "error": "count must be an integer between 1 and 8"}]
         with ThreadPoolExecutor(max_workers=count) as ex:
             futures = [ex.submit(self._router.invoke, "code", [
                 {"role": "user", "content": prompt},
@@ -359,6 +365,8 @@ class MiMoEngine:
     # ===== Snapshot (full state save) =====
     def snapshot(self, name: Optional[str] = None) -> Dict:
         name = name or f"snap-{int(time.time())}"
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            return {"ok": False, "error": "snapshot name must be a 1-64 character slug"}
         snap_dir = self._home / "snapshots"
         snap_dir.mkdir(parents=True, exist_ok=True)
         entries = self.memory_list()
@@ -374,6 +382,8 @@ class MiMoEngine:
         return {"ok": True, "name": name, "count": len(entries)}
 
     def restore_snapshot(self, name: str) -> Dict:
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            return {"ok": False, "error": "snapshot name must be a 1-64 character slug"}
         path = self._home / "snapshots" / f"{name}.json"
         if not path.exists():
             return {"error": f"snapshot {name!r} not found"}
