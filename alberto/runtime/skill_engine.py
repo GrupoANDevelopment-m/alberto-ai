@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -65,20 +66,37 @@ def extract_code_blocks(content: str) -> List[Dict[str, str]]:
     return blocks
 
 
-def substitute_args(text: str, args: List[str]) -> str:
-    """Replace {{args[0]}} placeholders with actual args, join as space."""
+def substitute_args(text: str, args: List[str], lang: str = "bash") -> str:
+    """Substitute placeholders using language-aware argument escaping.
+
+    Shell arguments are quoted with shlex.quote; Python arguments become
+    string literals via repr. The {{args}} placeholder expands all arguments,
+    while {{args[N]}} selects one argument. Placeholders must be unquoted in
+    executable code blocks.
+    """
     if not args:
-        # Remove {{...}} placeholders if no args given
-        text = re.sub(r"\{\{[^}]+\}\}", "", text)
-        return text
-    # Replace {{args}} with first arg, {{args[0]}} same, {{args[1]}} with second, etc.
-    for i, arg in enumerate(args):
-        text = text.replace(f"{{{{args[{i}]}}}}", arg)
-        text = text.replace(f"{{{{args}}}}", arg)
-    # Replace any remaining {{args[N]}} with empty
-    text = re.sub(r"\{\{args\[\d+\]\}\}", "", text)
-    text = re.sub(r"\{\{args\}\}", "", text)
-    return text
+        return re.sub(r"\{\{[^}]+\}\}", "", text)
+
+    def encode(value: str) -> str:
+        if lang in ("bash", "sh", "shell"):
+            return shlex.quote(value)
+        if lang in ("python", "python3", "py"):
+            return repr(value)
+        return value
+
+    def replace(match):
+        index_text = match.group(1)
+        if index_text is None:
+            selected = args
+        else:
+            index = int(index_text)
+            selected = args[index:index + 1]
+        encoded = [encode(value) for value in selected]
+        if lang in ("python", "python3", "py"):
+            return ", ".join(encoded)
+        return " ".join(encoded)
+
+    return re.sub(r"\{\{args(?:\[(\d+)\])?\}\}", replace, text)
 
 
 def show_skill(name: str) -> Dict[str, Any]:
@@ -114,51 +132,51 @@ def show_skill(name: str) -> Dict[str, Any]:
 
 
 def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) -> Dict[str, Any]:
-    """Run the primary code block of a skill.
-
-    Picks the first bash/python/shell block. Substitutes args, runs via subprocess.
-    """
+    """Run the first executable skill block through the configured sandbox."""
     path = find_skill(name)
     if not path:
         return {"ok": False, "error": f"skill '{name}' not found"}
+    if sandbox is None or not hasattr(sandbox, "run") or not hasattr(sandbox, "home"):
+        return {"ok": False, "error": "a configured sandbox is required to execute skills"}
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     if not blocks:
         return {"ok": False, "error": f"no code blocks in {name}"}
-    # Find first executable block
     executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
-    primary = None
-    for b in blocks:
-        if b["lang"] in executable_langs:
-            primary = b
-            break
-    if not primary:
-        primary = blocks[0]
-    code = substitute_args(primary["code"], args)
-    # Execute
+    primary = next((block for block in blocks if block["lang"] in executable_langs), None)
+    if primary is None:
+        return {"ok": False, "error": f"no executable code block in {name}"}
+    code = substitute_args(primary["code"], args, lang=primary["lang"])
     try:
         if primary["lang"] in ("python", "python3", "py"):
-            cmd = [sys.executable, "-c", code]
+            python_executable = "python3" if getattr(sandbox, "_mode", None) == "docker" else sys.executable
+            cmd = [python_executable, "-c", code]
         else:
             cmd = ["bash", "-c", code]
-        cwd = str(sandbox.home()) if sandbox and hasattr(sandbox, "home") else None
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=timeout, cwd=cwd,
-        )
+        result = sandbox.run(cmd, timeout=timeout, cwd=str(sandbox.home()))
+        stdout = getattr(result, "stdout", "") or ""
+        stderr = getattr(result, "stderr", "") or ""
         return {
             "ok": result.returncode == 0,
             "lang": primary["lang"],
             "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "command": "\n".join(cmd[:2]) + ("..." if len(cmd) > 2 else ""),
+            "stdout": stdout,
+            "stderr": stderr,
+            "command": " ".join(cmd[:2]) + ("..." if len(cmd) > 2 else ""),
         }
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {timeout}s"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+
+def get_skill_content(name: str) -> str:
+    """Return raw SKILL.md content for a named skill, or an empty string."""
+    path = find_skill(name)
+    if not path:
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 def list_skills(category: Optional[str] = None) -> List[Dict[str, Any]]:
     """List all skills with metadata."""
@@ -290,7 +308,9 @@ def main(argv: List[str]) -> int:
     elif args.cmd == "show":
         print(json.dumps(show_skill(args.name), indent=2, ensure_ascii=False))
     elif args.cmd == "run":
-        r = run_skill(args.name, args.args, timeout=args.timeout)
+        from alberto.sandbox.base import LocalSandbox
+        sandbox = LocalSandbox()
+        r = run_skill(args.name, args.args, sandbox=sandbox, timeout=args.timeout)
         if r.get("ok"):
             print(r.get("stdout", ""))
         else:
@@ -298,6 +318,35 @@ def main(argv: List[str]) -> int:
             if r.get("stderr"):
                 print(r["stderr"], file=sys.stderr)
         return 0 if r.get("ok") else 1
+    elif args.cmd == "run-all":
+        from alberto.sandbox.base import LocalSandbox
+        sandbox = LocalSandbox()
+        path = find_skill(args.name)
+        if not path:
+            print(f"skill '{args.name}' not found", file=sys.stderr)
+            return 1
+        content = path.read_text(encoding="utf-8", errors="replace")
+        blocks = extract_code_blocks(content)
+        executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
+        for i, block in enumerate(blocks):
+            if block["lang"] not in executable_langs:
+                continue
+            code = substitute_args(block["code"], args.args, lang=block["lang"])
+            print(f"\n--- block {i+1} ({block['lang']}) ---")
+            if block["lang"] in ("python", "python3", "py"):
+                cmd = [sys.executable, "-c", code]
+            else:
+                cmd = ["bash", "-c", code]
+            try:
+                result = sandbox.run(cmd, timeout=args.timeout, cwd=str(sandbox.home()))
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(result.stderr, end="", file=sys.stderr)
+                if result.returncode != 0:
+                    print(f"block exited with code {result.returncode}", file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                print(f"timeout after {args.timeout}s", file=sys.stderr)
     elif args.cmd == "commands":
         path = find_skill(args.name)
         if not path:
