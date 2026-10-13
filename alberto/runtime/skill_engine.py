@@ -15,6 +15,7 @@ Usage:
   alberto skill auto-invoke "<intent>"        # auto-pick best skill for intent
 """
 from __future__ import annotations
+import os
 import re
 import shlex
 import subprocess
@@ -308,8 +309,9 @@ def main(argv: List[str]) -> int:
     elif args.cmd == "show":
         print(json.dumps(show_skill(args.name), indent=2, ensure_ascii=False))
     elif args.cmd == "run":
-        from alberto.sandbox.base import LocalSandbox
-        sandbox = LocalSandbox()
+        from alberto.sandbox.base import make_sandbox
+        sandbox_kind = os.environ.get("ALBERTO_SANDBOX_KIND", "local").strip().lower()
+        sandbox = make_sandbox(sandbox_kind)
         r = run_skill(args.name, args.args, sandbox=sandbox, timeout=args.timeout)
         if r.get("ok"):
             print(r.get("stdout", ""))
@@ -319,8 +321,9 @@ def main(argv: List[str]) -> int:
                 print(r["stderr"], file=sys.stderr)
         return 0 if r.get("ok") else 1
     elif args.cmd == "run-all":
-        from alberto.sandbox.base import LocalSandbox
-        sandbox = LocalSandbox()
+        from alberto.sandbox.base import make_sandbox
+        sandbox_kind = os.environ.get("ALBERTO_SANDBOX_KIND", "local").strip().lower()
+        sandbox = make_sandbox(sandbox_kind)
         path = find_skill(args.name)
         if not path:
             print(f"skill '{args.name}' not found", file=sys.stderr)
@@ -328,13 +331,15 @@ def main(argv: List[str]) -> int:
         content = path.read_text(encoding="utf-8", errors="replace")
         blocks = extract_code_blocks(content)
         executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
+        failed = False
         for i, block in enumerate(blocks):
             if block["lang"] not in executable_langs:
                 continue
             code = substitute_args(block["code"], args.args, lang=block["lang"])
             print(f"\n--- block {i+1} ({block['lang']}) ---")
             if block["lang"] in ("python", "python3", "py"):
-                cmd = [sys.executable, "-c", code]
+                python_executable = "python3" if getattr(sandbox, "_mode", None) == "docker" else sys.executable
+                cmd = [python_executable, "-c", code]
             else:
                 cmd = ["bash", "-c", code]
             try:
@@ -344,9 +349,12 @@ def main(argv: List[str]) -> int:
                 if result.stderr:
                     print(result.stderr, end="", file=sys.stderr)
                 if result.returncode != 0:
+                    failed = True
                     print(f"block exited with code {result.returncode}", file=sys.stderr)
             except subprocess.TimeoutExpired:
+                failed = True
                 print(f"timeout after {args.timeout}s", file=sys.stderr)
+        return 1 if failed else 0
     elif args.cmd == "commands":
         path = find_skill(args.name)
         if not path:
@@ -357,40 +365,7 @@ def main(argv: List[str]) -> int:
         for i, b in enumerate(blocks):
             print(f"\n--- block {i+1} ({b['lang']}) ---")
             print(b["code"][:400])
-    elif args.cmd == "run-all":
-        path = find_skill(args.name)
-        if not path:
-            print(f"skill '{args.name}' not found", file=sys.stderr)
-            return 1
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        for i, b in enumerate(blocks):
-            if b["lang"] not in ("bash", "sh", "shell", "python", "python3", "py"):
-                continue
-            code = substitute_args(b["code"], args.args)
-            print(f"\n--- block {i+1} ({b['lang']}) ---")
-            try:
-                if b["lang"] in ("python", "python3", "py"):
-                    cmd = [sys.executable, "-c", code]
-                else:
-                    cmd = ["bash", "-c", code]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
-                if result.stdout:
-                    print(result.stdout, end="")
-                if result.stderr:
-                    print(result.stderr, end="", file=sys.stderr)
-            except subprocess.TimeoutExpired:
-                print(f"timeout after {args.timeout}s", file=sys.stderr)
-    elif args.cmd == "commands":
-        path = find_skill(args.name)
-        if not path:
-            print(f"skill '{args.name}' not found")
-            return 1
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        for i, b in enumerate(blocks):
-            print(f"\n--- block {i+1} ({b['lang']}) ---")
-            print(b["code"][:400])
+
     return 0
 
 
