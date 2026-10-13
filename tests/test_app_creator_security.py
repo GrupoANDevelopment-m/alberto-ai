@@ -34,7 +34,7 @@ def test_generated_sources_keep_untrusted_description_as_data(tmp_path):
     assert f'"description": {json.dumps(description)}' in backend_source
     frontend_source = (root / "frontend" / "src" / "App.tsx").read_text()
     assert "{" + json.dumps(description) + "}" in frontend_source
-    assert 'raise RuntimeError("injected")' not in backend_source
+    assert not any(isinstance(node, ast.Raise) for node in ast.walk(ast.parse(backend_source)))
 
 
 def test_create_scaffolds_expected_files_and_duplicate_is_non_destructive(tmp_path):
