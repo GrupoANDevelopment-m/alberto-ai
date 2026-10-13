@@ -85,6 +85,18 @@ import re as _re_security
 _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
+def _execute_shell_command(alberto, command: str, timeout: int):
+    """Use the configured sandbox for agent shell calls when available."""
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is not None and callable(getattr(sandbox, "run", None)):
+        cwd = str(sandbox.home()) if callable(getattr(sandbox, "home", None)) else None
+        return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
+    # Compatibility for direct legacy callers without an Alberto instance.
+    return subprocess.run(
+        command, shell=True, capture_output=True, text=True, timeout=timeout
+    )
+
+
 @register_tool("run_shell")
 def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     """Run a shell command. Args: command (str), timeout (int, default 30).
@@ -109,7 +121,7 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
@@ -330,7 +342,7 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = r.stdout or ""
         err = r.stderr or ""
         combined = out + (("\n[stderr]\n" + err) if err else "")
