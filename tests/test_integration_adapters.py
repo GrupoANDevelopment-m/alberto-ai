@@ -266,7 +266,7 @@ def test_call_multimodal_kimi_returns_stream_chunks(monkeypatch):
     result = integration.call_multimodal_kimi(None, "describe", "https://example.invalid/image.png")
     assert result["ok"] is True
     assert result["chunks"] == ["data: first", "data: second"]
-    assert result["full"] == "data: first\\ndata: second"
+    assert result["full"] == "data: first\ndata: second"
 
 
 def test_call_multimodal_kimi_converts_transport_exception(monkeypatch):
