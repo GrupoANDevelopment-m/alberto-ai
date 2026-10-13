@@ -170,6 +170,7 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
         raise ValueError("pause must be between 0 and 30 seconds")
 
     agent = Alberto()
+    run_started_at = datetime.now(timezone.utc).isoformat()
     results: List[Dict[str, Any]] = []
     try:
         configured_tasks = agent.router.list_tasks()
@@ -197,13 +198,20 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
                     result = agent.chat(task["prompt"], conversation_id=conversation.id)
                     latency_ms = (time.perf_counter() - started) * 1000
                     response = str(result.get("response", "") or "")
+                    strategy = result.get("strategy")
+                    model_used = bool(strategy)
                     record.update({
                         "response": response,
-                        "passed": score_response(task, response),
+                        "model_used": model_used,
+                        "passed": score_response(task, response) if model_used else False,
                         "latency_ms": round(latency_ms, 2),
                         "tool_call_count": len(result.get("tool_calls") or []),
-                        "strategy": str(result.get("strategy") or "")[:200],
+                        "strategy": str(strategy or "")[:200],
                     })
+                    if result.get("error"):
+                        record["error"] = str(result["error"])
+                    elif not model_used:
+                        record["error"] = "no model strategy returned; not counted as a model-quality pass"
                 except Exception as exc:
                     record["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
                     record["error"] = f"{type(exc).__name__}: {exc}"
@@ -211,9 +219,14 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
                 if pause_seconds:
                     time.sleep(pause_seconds)
 
+        by_category = {
+            category: summarize_results([item for item in results if item["category"] == category])
+            for category in sorted({item["category"] for item in results})
+        }
         return {
             "schema_version": 1,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": run_started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
             "agent_version": getattr(agent, "version", "unknown"),
             "sandbox_type": type(agent.sandbox).__name__,
             "sandbox_isolation_level": getattr(agent.sandbox, "isolation_level", "host-process"),
@@ -221,6 +234,7 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
             "suite": "alberto-real-quality-latency-v1",
             "repeats": repeats,
             "metrics": summarize_results(results),
+            "metrics_by_category": by_category,
             "results": results,
             "notes": [
                 "Responses are live outputs from Alberto.chat; no mock model responses are used.",
