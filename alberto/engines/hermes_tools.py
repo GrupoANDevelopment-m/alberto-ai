@@ -580,36 +580,53 @@ def tool_computer_use(alberto, args):
 
 
 def tool_file(alberto, args):
-    """Real Hermes file_tools + file_operations."""
-    action = args.get("action", "read")
-    path = args.get("path", "")
-    for mod_name in ("file_tools", "file_operations"):
-        mod = _try_import(mod_name)
-        if mod is None:
-            continue
-        fn = getattr(mod, action, None) or getattr(mod, f"file_{action}", None)
-        if fn:
-            try:
-                result = fn(path=path, **args) if "path" in _signature(fn) else fn(path, **args)
-                return {"ok": True, "result": result}
-            except Exception as e:
-                return {"ok": False, "error": str(e)}
-    # Fallback: pure Python
+    """Read/write/list files only within Alberto's configured sandbox home."""
+    action = str(args.get("action", "read")).strip().lower()
+    raw_path = str(args.get("path", "")).strip()
+    if not raw_path:
+        return {"ok": False, "error": "missing 'path'"}
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not all(callable(getattr(sandbox, name, None)) for name in ("home", "read", "write", "exists", "run")):
+        return {"ok": False, "error": "a configured sandbox is required for file operations"}
+
     try:
-        p = Path(path)
+        home = Path(sandbox.home()).resolve()
+        supplied = Path(raw_path).expanduser()
+        candidate = supplied if supplied.is_absolute() else home / supplied
+        resolved = candidate.resolve()
+        try:
+            relative = resolved.relative_to(home)
+        except ValueError:
+            return {"ok": False, "error": "path escapes sandbox home"}
+        if not relative.parts:
+            if action not in ("list", "exists"):
+                return {"ok": False, "error": "operation on sandbox root is not allowed"}
         if action == "read":
-            return {"ok": True, "content": p.read_text(encoding="utf-8", errors="replace")}
+            if not sandbox.exists(relative):
+                return {"ok": False, "error": "file not found"}
+            return {"ok": True, "content": sandbox.read(relative)}
         if action == "write":
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(args.get("content", ""), encoding="utf-8")
-            return {"ok": True, "wrote": len(args.get("content", ""))}
+            value = args.get("content", "")
+            if not isinstance(value, str):
+                return {"ok": False, "error": "'content' must be a string"}
+            sandbox.write(relative, value)
+            return {"ok": True, "wrote": len(value)}
         if action == "list":
-            return {"ok": True, "entries": [str(x) for x in p.iterdir()]}
+            if not sandbox.exists(relative):
+                return {"ok": False, "error": "directory not found"}
+            result = sandbox.run(
+                ["ls", "-1A", str(relative) if relative.parts else "."],
+                timeout=10,
+                cwd=home,
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": (result.stderr or "directory listing failed")[:500]}
+            return {"ok": True, "entries": [line for line in (result.stdout or "").splitlines()]}
         if action == "exists":
-            return {"ok": True, "exists": p.exists()}
+            return {"ok": True, "exists": sandbox.exists(relative)}
+        return {"ok": False, "error": f"unknown action: {action}"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": f"unknown action: {action}"}
+        return {"ok": False, "error": f"sandbox file operation failed: {type(e).__name__}: {e}"}
 
 
 def tool_patch_parser(alberto, args):
