@@ -7,7 +7,7 @@ import pytest
 from alberto.runtime.tester import AppTester
 
 
-def make_make_tester(tmp_path):
+def make_tester(tmp_path):
     app = tmp_path / "app"
     app.mkdir()
     return AppTester(app)
