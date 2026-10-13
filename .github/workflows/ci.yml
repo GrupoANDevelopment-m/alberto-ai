@@ -8,6 +8,12 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Keep only the newest validation run for this branch/PR to avoid stale runs
+# consuming runners after a rapid series of hardening commits.
+concurrency:
+  group: alberto-ai-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
