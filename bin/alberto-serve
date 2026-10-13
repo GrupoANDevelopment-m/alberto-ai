@@ -20,6 +20,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -74,9 +75,19 @@ def find_free_port(start: int = 8741) -> int:
 
 
 def check_lock(pidfile: Path) -> bool:
-    """Return True if another alberto-serve is already running."""
-    if not pidfile.exists():
+    """Return True for a live instance or an unsafe PID file that needs review."""
+    try:
+        info = pidfile.lstat()
+    except FileNotFoundError:
         return False
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        print(f"[alberto-serve] unsafe PID file permissions/ownership: {pidfile}",
+              file=sys.stderr, flush=True)
+        return True
     try:
         pid = int(pidfile.read_text().strip())
         os.kill(pid, 0)
@@ -87,16 +98,30 @@ def check_lock(pidfile: Path) -> bool:
 
 
 def write_lock(pidfile: Path, pid: int):
+    """Create a private PID file without following symlinks."""
     pidfile.parent.mkdir(parents=True, exist_ok=True)
-    pidfile.write_text(str(pid))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(pidfile, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(str(pid))
+    os.chmod(pidfile, 0o600)
 
 
 _ACTIVE_SERVER_PROC = None
 
 
 def kill_alberto_serves(pidfile: Path):
-    """Stop only the process recorded in this launcher's PID file."""
+    """Stop only a verified, owned process recorded in this launcher's PID file."""
     try:
+        info = pidfile.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
+            raise RuntimeError("unsafe PID file permissions/ownership; refusing to kill a process")
         pid = int(pidfile.read_text().strip())
     except (OSError, ValueError):
         pidfile.unlink(missing_ok=True)
