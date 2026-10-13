@@ -295,16 +295,20 @@ class SelfHealer:
             return {"fix": "stale_lock", "ok": False, "error": str(e)}
 
     def _fix_tls_error(self, err: str, ctx: str) -> Dict[str, Any]:
-        # Switch to next available API key
+        # Only rotate among NVIDIA credentials. Copying OPENAI_API_KEY or another
+        # provider's credential into NVIDIA_API_KEY creates invalid auth and can
+        # contaminate provider routing.
         try:
-            nvidia_keys = [k for k in os.environ if k.startswith("NVIDIA_API_KEY") or "API_KEY" in k]
             current = os.environ.get("NVIDIA_API_KEY")
-            # Try to find a different key
-            for k in os.environ:
-                if "_KEY" in k and k != "NVIDIA_API_KEY" and os.environ.get(k):
-                    os.environ["NVIDIA_API_KEY"] = os.environ[k]
-                    return {"fix": "tls_error", "ok": True, "switched_to": k}
-            return {"fix": "tls_error", "ok": False, "reason": "no alternate key available"}
+            candidates = sorted(
+                key for key, value in os.environ.items()
+                if key.startswith("NVIDIA_API_KEY_") and value and value != current
+            )
+            if not candidates:
+                return {"fix": "tls_error", "ok": False, "reason": "no alternate NVIDIA API key available"}
+            selected = candidates[0]
+            os.environ["NVIDIA_API_KEY"] = os.environ[selected]
+            return {"fix": "tls_error", "ok": True, "switched_to": selected}
         except Exception as e:
             return {"fix": "tls_error", "ok": False, "error": str(e)}
 
