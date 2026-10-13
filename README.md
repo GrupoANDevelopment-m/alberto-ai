@@ -14,6 +14,12 @@
 
 Capabilities depend on installed optional components, provider credentials, network access, and sandbox mode. A listed tool or upstream directory does not by itself prove that every upstream feature is fully integrated or production-safe.
 
+## MiMo application generation
+
+The `mimo_app_create` tool connects MiMo's `spec → tdd → review` planning pipeline to the application scaffolder. It refuses to create the scaffold if a planning step fails and confines tool-created projects to the sandbox's `apps` directory. The current scaffold is deterministic React/Vite + FastAPI boilerplate; **MiMo planning does not yet mean arbitrary model-generated source files are materialized**. Model output is not executed as code. This distinction is intentional until generated-code validation, dependency allowlisting, build/test gates, and isolated execution are implemented.
+
+The standalone `alberto app create` command still creates the deterministic scaffold directly. Use the MiMo tool through Alberto's tool-calling path when you want the specification, test plan, and security review included.
+
 ## Installation
 
 Python 3.11 is the CI-tested version.
