@@ -1442,10 +1442,17 @@ def _mimo_app_create(alberto, args):
         return {"ok": False, "error": f"MiMo planning failed: {type(exc).__name__}"}
     if not isinstance(plan, dict) or not plan:
         return {"ok": False, "error": "MiMo did not return a usable application plan"}
-    failed = [step for step, value in plan.items()
-              if not isinstance(value, dict) or not isinstance(value.get("content"), str)
-              or not value.get("content", "").strip()
-              or value.get("content", "").startswith("[error]")]
+    failed = []
+    for step, value in plan.items():
+        if (not isinstance(value, dict)
+                or not isinstance(value.get("content"), str)
+                or not value.get("content", "").strip()
+                or value.get("content", "").startswith("[error]")):
+            failed.append(step)
+            continue
+        verdict = value.get("verdict")
+        if not isinstance(verdict, dict) or verdict.get("verdict") != "pass":
+            failed.append(step)
     if failed:
         return {"ok": False, "error": "MiMo planning incomplete", "failed_steps": failed, "plan": plan}
     from alberto.runtime.app_creator import AppCreator
