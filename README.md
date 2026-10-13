@@ -56,7 +56,7 @@ export ALBERTO_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsa
 alberto-serve --host 127.0.0.1 --port 8741
 ```
 
-Clients must send `Authorization: Bearer <ALBERTO_API_TOKEN>` on `/api/*` requests. Put the service behind a TLS-terminating reverse proxy before remote access. The watchdog launcher now defaults to loopback; explicitly binding it to a public interface should only happen behind a reviewed ingress/proxy and firewall policy. The token must never be committed to the repository or written to logs.
+Clients must send `Authorization: Bearer <ALBERTO_API_TOKEN>` on `/api/*` requests. Put the service behind a TLS-terminating reverse proxy before remote access. The watchdog launcher now defaults to loopback; explicitly binding it to a public interface should only happen behind a reviewed ingress/proxy and firewall policy. The token must never be committed to the repository or written to logs. In production, watchdog-triggered automatic self-healing (which can mutate files/configuration) is disabled by default. Set `ALBERTO_AUTO_HEAL=1` only after reviewing the repair policy, backup strategy, and rollback path.
 
 ## Sandbox and execution safety
 
