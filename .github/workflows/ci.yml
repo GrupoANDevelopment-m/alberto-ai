@@ -49,7 +49,7 @@ jobs:
           NVIDIA_API_KEY: ""
           OPENAI_API_KEY: ""
         run: |
-          python -m pytest tests/test_meta.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py -m "not network and not llm and not slow" -v --tb=short
+          python -m pytest tests/test_meta.py tests/test_v15_real.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py -m "not network and not llm and not slow" -v --tb=short
 
       - name: Generate coverage report
         run: |
