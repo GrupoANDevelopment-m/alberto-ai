@@ -1420,7 +1420,7 @@ def _mimo_app_create(alberto, args):
         return {"ok": False, "error": "need a valid 'name' and non-empty 'spec'/'description'"}
     if len(spec) > 4000:
         return {"ok": False, "error": "app specification must be at most 4000 characters"}
-    output_dir = args.get("output_dir", "apps")
+    output_dir = args.get("output_dir", ".")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return {"ok": False, "error": "output_dir must be a non-empty path"}
     # Tool-created projects are confined to the sandbox's apps directory.
