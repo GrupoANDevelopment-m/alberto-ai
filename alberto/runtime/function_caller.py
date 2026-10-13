@@ -723,101 +723,114 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("apply_patch")
 def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL patch applier using Hermes patch_parser (v4a format).
-
-    Hermes patch_parser supports:
-    - v4a format with @@ hunks
-    - OperationType (add/delete/replace/rename)
-    - PatchOperation dataclass with file_path, hunks
-
-    Args: path (str), patch (str, the v4a patch text).
-    """
+    """Apply a V4A patch with validate-before-write semantics and path confinement."""
     p_str = args.get("path", "")
     patch = args.get("patch", "")
     if not p_str or not patch:
         return "path and patch required", True
-    # Real Hermes path_security check
-    safe, reason, blocked = _bridge_path_security(p_str)
-    if blocked:
-        return f"Hermes path_security blocked: {reason}", True
+
     try:
+        safe, reason, blocked = _bridge_path_security(p_str)
+        if blocked:
+            return f"Hermes path_security blocked: {reason}", True
+
         from .upstream_bridge import _get
-        mod = _get("patch_parser")
-        if mod is not None and hasattr(mod, "parse_v4a_patch"):
-            operations, error = mod.parse_v4a_patch(patch)
-            if error:
-                return f"patch parse error: {error}", True
-            if not operations:
-                return "no operations in patch", True
-            results = []
-            for op in operations:
-                file_path = op.new_path or op.file_path
-                content_parts = []
-                for hunk in op.hunks:
-                    for line in hunk.lines:
-                        prefix = line.prefix
-                        if prefix in ("+", " "):
-                            content_parts.append(line.content + "\n")
-                if content_parts:
-                    target = Path(p_str).parent / file_path if not Path(file_path).is_absolute() else Path(file_path)
-                    output_content = "".join(content_parts)
+        parser = _get("patch_parser")
+        if parser is None or not hasattr(parser, "parse_v4a_patch") or not hasattr(parser, "apply_v4a_operations"):
+            return "V4A patch parser is unavailable; no files were modified", True
+
+        operations, parse_error = parser.parse_v4a_patch(patch)
+        if parse_error:
+            return f"patch parse error: {parse_error}", True
+        if not operations:
+            return "no operations in patch", True
+
+        from types import SimpleNamespace
+        base_dir = Path(p_str).expanduser().resolve().parent
+
+        class _SafePatchFileOps:
+            """Filesystem adapter that confines every operation to the target directory."""
+
+            def _resolve(self, raw_path: str) -> Path:
+                raw = Path(raw_path).expanduser()
+                candidate = raw if raw.is_absolute() else base_dir / raw
+                resolved = candidate.resolve()
+                try:
+                    resolved.relative_to(base_dir)
+                except ValueError as exc:
+                    raise ValueError(f"patch path escapes target directory: {raw_path}") from exc
+                allowed, why, is_blocked = _bridge_path_security(str(resolved))
+                if is_blocked:
+                    raise PermissionError(f"path policy blocked {resolved}: {why}")
+                return resolved
+
+            def read_file_raw(self, path: str):
+                try:
+                    target = self._resolve(path)
+                    if not target.is_file():
+                        return SimpleNamespace(content="", error=f"file not found: {path}")
+                    return SimpleNamespace(content=target.read_text(encoding="utf-8"), error=None)
+                except Exception as exc:
+                    return SimpleNamespace(content="", error=str(exc))
+
+            def write_file(self, path: str, file_content: str):
+                try:
+                    target = self._resolve(path)
                     try:
                         from .nemoclaw_real import nemoclaw_pre_write_check
-                        allowed, final_target, final_content = nemoclaw_pre_write_check(
-                            alberto, str(target), output_content
+                        allowed, final_path, final_content = nemoclaw_pre_write_check(
+                            alberto, str(target), file_content
                         )
                         if not allowed:
-                            return f"BLOCKED by NemoClaw: {final_target}", True
-                        target = Path(final_target).expanduser()
-                        output_content = final_content
+                            return SimpleNamespace(error=f"blocked by NemoClaw: {final_path}")
+                        target = Path(final_path).expanduser().resolve()
+                        target.relative_to(base_dir)
+                        file_content = final_content
                     except ImportError:
                         pass
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(output_content)
-                    results.append(f"wrote {target}")
-            return "\n".join(results), False
-        # Fallback parser
-        import re as _re_apply
-        hunk_re = _re_apply.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
-        patch_lines = patch.splitlines()
-        pi = 0
-        out = []
-        while pi < len(patch_lines):
-            line = patch_lines[pi]
-            m = hunk_re.match(line)
-            if m:
-                pi += 1
-                while pi < len(patch_lines) and not patch_lines[pi].startswith("@@"):
-                    pl = patch_lines[pi]
-                    if pl.startswith("+"):
-                        out.append(pl[1:] + "\n")
-                    elif pl.startswith("-"):
-                        pass
-                    elif pl.startswith(" "):
-                        out.append(pl[1:] + "\n")
-                    pi += 1
-            else:
-                pi += 1
-        if out:
-            output_content = "".join(out)
-            p = Path(p_str).expanduser()
-            try:
-                from .nemoclaw_real import nemoclaw_pre_write_check
-                allowed, final_path, final_content = nemoclaw_pre_write_check(
-                    alberto, str(p), output_content
-                )
-                if not allowed:
-                    return f"BLOCKED by NemoClaw: {final_path}", True
-                p = Path(final_path).expanduser()
-                output_content = final_content
-            except ImportError:
-                pass
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(output_content)
-            return f"patched {p} (fallback parser)", False
-        return "no usable hunks in patch", True
+                    target.write_text(file_content, encoding="utf-8")
+                    return SimpleNamespace(error=None, lsp_diagnostics=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+            def delete_file(self, path: str):
+                try:
+                    target = self._resolve(path)
+                    if not target.is_file():
+                        return SimpleNamespace(error=f"file not found: {path}")
+                    target.unlink()
+                    return SimpleNamespace(error=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+            def move_file(self, source: str, destination: str):
+                try:
+                    src = self._resolve(source)
+                    dst = self._resolve(destination)
+                    if not src.is_file():
+                        return SimpleNamespace(error=f"source file not found: {source}")
+                    if dst.exists():
+                        return SimpleNamespace(error=f"destination already exists: {destination}")
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    src.replace(dst)
+                    return SimpleNamespace(error=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+        result = parser.apply_v4a_operations(operations, _SafePatchFileOps())
+        if not result.success:
+            return f"patch failed: {result.error or 'unknown patch error'}", True
+        summary = result.diff or "patch applied"
+        if result.files_modified or result.files_created or result.files_deleted:
+            summary += (
+                f"\nmodified={result.files_modified}"
+                f"\ncreated={result.files_created}"
+                f"\ndeleted={result.files_deleted}"
+            )
+        return summary, False
     except Exception as e:
-        return f"error: {e}", True
+        return f"error applying patch: {type(e).__name__}: {e}", True
 
 
 @register_tool("change_directory")
