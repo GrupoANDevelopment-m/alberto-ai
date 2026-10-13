@@ -90,9 +90,19 @@ _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 def _execute_shell_command(alberto, command: str, timeout: int):
     """Run shell commands only through the configured sandbox; fail closed."""
     sandbox = getattr(alberto, "sandbox", None)
-    if sandbox is None or not callable(getattr(sandbox, "run", None)):
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
         raise RuntimeError("a configured sandbox is required for shell execution")
-    cwd = str(sandbox.home()) if callable(getattr(sandbox, "home", None)) else None
+    home = Path(sandbox.home()).resolve()
+    cwd = home
+    requested_cwd = getattr(alberto, "_cwd", None)
+    if requested_cwd:
+        try:
+            candidate = Path(requested_cwd).expanduser().resolve()
+            candidate.relative_to(home)
+            if candidate.is_dir():
+                cwd = candidate
+        except (OSError, ValueError):
+            cwd = home
     return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=cwd)
 
 
@@ -835,30 +845,31 @@ def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("change_directory")
 def tool_change_directory(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL persistent cwd — stored in ~/.alberto/cwd and applied to all subprocesses.
-
-    Args: path (str).
-    """
+    """Set a persistent working directory confined to the configured sandbox."""
     new_path = args.get("path", "")
     if not new_path:
         return "no path", True
-    # Real Hermes path_security check
-    safe, reason, blocked = _bridge_path_security(new_path)
-    if blocked:
-        return f"Hermes path_security blocked: {reason}", True
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        return "a configured sandbox is required for directory changes", True
     try:
-        p = Path(new_path).expanduser().resolve()
-        if not p.exists():
-            return f"path not found: {new_path}", True
-        # Store in alberto state
-        alberto._cwd = str(p)
-        # Persist to ~/.alberto/cwd
-        cwd_file = Path.home() / ".alberto" / "cwd"
+        home = Path(sandbox.home()).resolve()
+        requested = Path(str(new_path)).expanduser()
+        candidate = requested if requested.is_absolute() else home / requested
+        candidate = candidate.resolve()
+        try:
+            candidate.relative_to(home)
+        except ValueError:
+            return "directory path escapes sandbox home", True
+        if not candidate.exists() or not candidate.is_dir():
+            return f"directory not found inside sandbox: {new_path}", True
+        alberto._cwd = str(candidate)
+        cwd_file = home / ".alberto" / "cwd"
         cwd_file.parent.mkdir(parents=True, exist_ok=True)
-        cwd_file.write_text(str(p))
-        return f"cwd changed to {p} (persisted)", False
+        cwd_file.write_text(str(candidate), encoding="utf-8")
+        return f"working directory set to {candidate}", False
     except Exception as e:
-        return f"error: {e}", True
+        return f"directory change failed: {type(e).__name__}: {e}", True
 
 
 @register_tool("task")
