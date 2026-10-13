@@ -1,5 +1,6 @@
 """Security tests for the watchdog launcher's PID-file handling."""
 import importlib.util
+from importlib.machinery import SourceFileLoader
 import os
 import stat
 from pathlib import Path
@@ -8,10 +9,11 @@ import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "alberto-serve"
-SPEC = importlib.util.spec_from_file_location("alberto_serve_launcher", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
+LOADER = SourceFileLoader("alberto_serve_launcher", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader("alberto_serve_launcher", LOADER)
+assert SPEC is not None
 launcher = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(launcher)
+LOADER.exec_module(launcher)
 
 
 def test_write_lock_creates_private_regular_file(tmp_path):
