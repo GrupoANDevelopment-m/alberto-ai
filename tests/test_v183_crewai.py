@@ -84,7 +84,7 @@ class TestCrewAISquadExecution:
         r = run_crew_squad(
             squad_name="content",
             workflow_yaml_path="/workspace/alberto-ai/workflows/content.yaml",
-            personas_dir="/workspace/alberto-ai/personas",
+            personas_dir=str(Path(__file__).resolve().parent.parent / "personas"),
             llm_model="openai/google/diffusiongemma-26b-a4b-it",
             llm_base_url="https://integrate.api.nvidia.com/v1",
             user_prompt="Write about Angola. Very short.",
