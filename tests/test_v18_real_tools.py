@@ -255,20 +255,38 @@ class TestToolApplyPatch:
 class TestToolChangeDirectory:
     """Real persistent cwd."""
 
-    def test_pwd(self):
+    def test_pwd(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["change_directory"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"path": "/tmp"})
-        assert not err
-        assert "/tmp" in out
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "cwd")
+        alberto = FakeAlberto()
+        target = alberto.sandbox.home() / "workspace"
+        target.mkdir()
+        try:
+            out, err = fn(alberto, {"path": "workspace"})
+            assert not err
+            assert str(target) in out
+            assert alberto._cwd == str(target)
+        finally:
+            alberto.sandbox.cleanup()
 
-    def test_blocked_path(self):
+    def test_blocked_path(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["change_directory"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"path": "../../etc"})
-        assert err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "cwd")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"path": "../../etc"})
+            assert err
+            assert "escapes sandbox" in out
+        finally:
+            alberto.sandbox.cleanup()
 
 
 class TestToolHealAttempt:
