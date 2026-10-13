@@ -222,25 +222,37 @@ class TestToolSkill:
 class TestToolApplyPatch:
     """Real patch applier."""
 
-    def test_simple_addition(self):
+    def test_simple_addition(self, tmp_path):
         import os
-        from alberto.runtime.function_caller import TOOL_REGISTRY
-        fn = TOOL_REGISTRY["apply_patch"]
-        class FakeAlberto: pass
-        # Create a temp file
         import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("line1\nline2\nline3\n")
-            fp = f.name
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
+
+        fn = TOOL_REGISTRY["apply_patch"]
+        sandbox = LocalSandbox(base_dir=tmp_path / "patch-sandbox")
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = sandbox
+        alberto = FakeAlberto()
+        fp = sandbox.home() / "sample.txt"
+        fp.write_text("line1\nline2\nline3\n", encoding="utf-8")
         try:
-            # Hermes v4a format requires *** Begin Patch *** wrapper
-            patch = "*** Begin Patch\n*** Update File: " + os.path.basename(fp) + "\n@@\n line1\n+inserted\n line2\n line3\n*** End Patch"
-            out, err = fn(FakeAlberto(), {"path": fp, "patch": patch})
-            # Should succeed (real Hermes v4a)
-            content = Path(fp).read_text()
+            patch = (
+                "*** Begin Patch\n"
+                "*** Update File: sample.txt\n"
+                "@@\n"
+                " line1\n"
+                "+inserted\n"
+                " line2\n"
+                " line3\n"
+                "*** End Patch"
+            )
+            out, err = fn(alberto, {"path": str(fp), "patch": patch})
+            assert not err, out
+            content = fp.read_text(encoding="utf-8")
             assert "inserted" in content, f"Expected 'inserted' in: {content!r}"
         finally:
-            os.unlink(fp)
+            sandbox.cleanup()
 
     def test_blocked_path(self):
         """Traversed path is blocked."""
