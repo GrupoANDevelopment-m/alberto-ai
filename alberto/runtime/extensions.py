@@ -14,6 +14,7 @@ Manifests are stored at:
 """
 from __future__ import annotations
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -136,7 +137,7 @@ class ExtensionInstaller:
             # Avoid plaintext Git transport and disable interactive credential prompts.
             if target.exists():
                 shutil.rmtree(target)
-            git_env = dict(__import__("os").environ, GIT_TERMINAL_PROMPT="0")
+            git_env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
             subprocess.run(
                 ["git", "clone", "--depth=1", source, str(target)],
                 check=True, capture_output=True, timeout=120, env=git_env,
