@@ -1412,6 +1412,52 @@ def _mimo_compose(alberto, args):
     return {"ok": True, "result": alberto.mimo.compose(args["spec"], steps=args.get("steps"))}
 
 
+def _mimo_app_create(alberto, args):
+    """Use MiMo's spec/TDD/review pipeline before scaffolding an application."""
+    name = args.get("name")
+    spec = args.get("spec") or args.get("description")
+    if not isinstance(name, str) or not isinstance(spec, str) or not spec.strip():
+        return {"ok": False, "error": "need a valid 'name' and non-empty 'spec'/'description'"}
+    if len(spec) > 4000:
+        return {"ok": False, "error": "app specification must be at most 4000 characters"}
+    output_dir = args.get("output_dir", "./apps")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        return {"ok": False, "error": "output_dir must be a non-empty path"}
+    # MiMo creates the engineering plan; AppCreator materializes only the
+    # reviewed, deterministic scaffold (never executes model-generated code).
+    try:
+        plan = alberto.mimo.compose(
+            "Plan a React/Vite frontend and FastAPI backend for this app. "
+            "Return implementation requirements, acceptance tests, and security review. "
+            "Do not return executable code.\n\n" + spec,
+            steps=["spec", "tdd", "review"],
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo planning failed: {type(exc).__name__}"}
+    if not isinstance(plan, dict) or not plan:
+        return {"ok": False, "error": "MiMo did not return a usable application plan"}
+    failed = [step for step, value in plan.items()
+              if not isinstance(value, dict) or not isinstance(value.get("content"), str)
+              or not value.get("content", "").strip()
+              or value.get("content", "").startswith("[error]")]
+    if failed:
+        return {"ok": False, "error": "MiMo planning incomplete", "failed_steps": failed, "plan": plan}
+    from alberto.runtime.app_creator import AppCreator
+    created = AppCreator(output_dir=Path(output_dir)).create(
+        name, spec, stack=args.get("stack", "react-vite-fastapi"), run=False
+    )
+    if not created.get("ok"):
+        return created
+    return {
+        "ok": True,
+        "engine": "MiMo",
+        "planning_steps": list(plan.keys()),
+        "plan": plan,
+        "application": created,
+        "note": "MiMo produced the spec/TDD/review plan; AppCreator materialized the deterministic scaffold. Model-generated source is not executed.",
+    }
+
+
 def _mimo_subagent(alberto, args):
     """MiMo parallel subagents."""
     if not args.get("prompt"):
@@ -1748,6 +1794,8 @@ HERMES_TOOL_REGISTRY = [
      "params": {"prompt": "string", "n?": "int"}, "fn": _mimo_max},
     {"name": "mimo_compose", "engine": "mimo", "desc": "MiMo compose pipeline (spec → tdd → review)",
      "params": {"spec": "string", "steps?": "list"}, "fn": _mimo_compose},
+    {"name": "mimo_app_create", "engine": "mimo", "desc": "Use MiMo spec/TDD/review planning and scaffold a React/Vite + FastAPI app",
+     "params": {"name": "string", "spec": "string", "output_dir?": "string", "stack?": "string"}, "fn": _mimo_app_create},
     {"name": "mimo_subagent", "engine": "mimo", "desc": "MiMo parallel subagents",
      "params": {"prompt": "string", "count?": "int"}, "fn": _mimo_subagent},
     {"name": "mimo_snapshot", "engine": "mimo", "desc": "MiMo memory snapshot (save/restore)",
