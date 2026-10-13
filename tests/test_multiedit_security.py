@@ -1,7 +1,7 @@
 """Regression tests for multiedit security controls."""
 from pathlib import Path
 
-from alberto.runtime.function_caller import tool_multiedit
+from alberto.runtime.function_caller import tool_apply_patch, tool_multiedit
 
 
 class FakeSandbox:
@@ -42,3 +42,35 @@ def test_multiedit_still_edits_file_inside_sandbox(tmp_path):
     assert is_error is False
     assert "1/1" in output
     assert target.read_text(encoding="utf-8") == "after"
+
+
+def test_apply_patch_blocks_protected_target(tmp_path, monkeypatch):
+    from alberto.runtime import upstream_bridge
+
+    monkeypatch.setattr(upstream_bridge, "_get", lambda name: None)
+    alberto = FakeAlberto(tmp_path)
+    output, is_error = tool_apply_patch(
+        alberto,
+        {"path": "/etc/passwd", "patch": "@@ -1,1 +1,1 @@\n-root\n+changed"},
+    )
+
+    assert is_error is True
+    assert "BLOCKED" in output
+
+
+def test_apply_patch_still_writes_inside_sandbox(tmp_path, monkeypatch):
+    from alberto.runtime import upstream_bridge
+
+    monkeypatch.setattr(upstream_bridge, "_get", lambda name: None)
+    alberto = FakeAlberto(tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("before", encoding="utf-8")
+
+    output, is_error = tool_apply_patch(
+        alberto,
+        {"path": str(target), "patch": "@@ -1,1 +1,1 @@\n-before\n+after"},
+    )
+
+    assert is_error is False
+    assert "patched" in output
+    assert target.read_text(encoding="utf-8") == "after\n"
