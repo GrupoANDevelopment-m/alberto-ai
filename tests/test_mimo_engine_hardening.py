@@ -203,3 +203,31 @@ def test_binary_invoke_falls_back_to_model_router_on_cli_failure(tmp_path, monke
         assert router.calls == 1
     finally:
         engine.stop()
+
+def test_judge_fails_closed_on_malformed_json_and_substring_tricks(tmp_path):
+    from types import SimpleNamespace
+
+    engine, _, _ = make_engine(tmp_path)
+    try:
+        engine._router = SimpleNamespace(invoke=lambda *a, **k: {
+            "choices": [{"message": {"content": "This does not pass the criteria"}}]
+        })
+        verdict = engine.judge("candidate")
+        assert verdict["verdict"] == "fail"
+        assert verdict["score"] == 0.0
+
+        engine._router = SimpleNamespace(invoke=lambda *a, **k: {
+            "choices": [{"message": {"content": '{"verdict":"pass","score":9,"reason":"ok"}'}}]
+        })
+        verdict = engine.judge("candidate")
+        assert verdict == {"verdict": "pass", "score": 1.0, "reason": "ok"}
+
+        engine._router = SimpleNamespace(invoke=lambda *a, **k: {
+            "choices": [{"message": {"content": '{"verdict":"pass","score":NaN,"reason":false}'}}]
+        })
+        verdict = engine.judge("candidate")
+        assert verdict["verdict"] == "pass"
+        assert verdict["score"] == 0.0
+        assert verdict["reason"] == "False"
+    finally:
+        engine.stop()
