@@ -106,8 +106,14 @@ def wait_for_health(port: int, timeout: float = 15.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status",
-                                       timeout=2) as r:
+            headers = {}
+            token = os.environ.get("ALBERTO_API_TOKEN", "")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/status", headers=headers
+            )
+            with urllib.request.urlopen(request, timeout=2) as r:
                 if r.status == 200:
                     return True
         except Exception:
