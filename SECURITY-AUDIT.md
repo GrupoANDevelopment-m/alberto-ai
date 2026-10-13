@@ -13,13 +13,13 @@ The former v1.7 report described Alberto as “safe for production” and assign
 | Finding | Risk | Current disposition |
 |---|---|---|
 | Host-process sandbox can execute commands as the current OS user | **Critical when exposed to untrusted prompts/tools** | Explicitly documented. `ALBERTO_REQUIRE_DOCKER=1` now selects NemoClaw mode by default and rejects a conflicting explicit mode. Deployment must still verify Docker actually starts with the expected restrictions. |
-| Shell safety based on pattern blocking is incomplete | High | Shell execution now fails closed if no sandbox object is configured and routes through the configured sandbox. Pattern checks remain defense-in-depth, not a complete shell allowlist. |
+| Shell safety based on pattern blocking is incomplete | High | Shell execution now fails closed if no sandbox object is configured and routes through the configured sandbox. Tool timeouts are validated and bounded to 1–3600 seconds. Pattern checks remain defense-in-depth, not a complete shell allowlist. |
 | Skills may contain executable shell/Python instructions | High | Treat skills as executable code. Provenance review, integrity validation, restricted permissions, and stronger approval controls remain necessary. |
 | Patch application can modify or create files | High | The patch handler uses validated patch operations and confines resolved targets to the target directory, applies protected-path checks, and has regression coverage. Further adversarial testing for symlinks, malformed hunks, race conditions, and partial writes remains required. |
 | Directory changes can escape intended workspace | High | The working-directory handler confines paths to the configured sandbox home and persists only validated directories. Regression tests cover traversal rejection. |
 | SSRF and unsafe URL fetches | High | URL-safety regression tests are in CI. DNS rebinding, redirect chains, IPv6 variants, proxy behavior, and every browser/fetch path still require independent adversarial coverage. |
 | Self-healing can mutate runtime state or restart processes | High | Targeted safety/control tests run in CI. Rollback, checkpoints, approval boundaries, and recovery after partial failure require further validation. |
-| Test coverage is low for the size of the codebase | High | The last completed coverage report before the latest configuration tests was **28% overall**. Critical security and orchestration modules need higher branch coverage. |
+| Test coverage is low for the size of the codebase | High | The last completed baseline was **28% line coverage**. CI now measures branch coverage and includes all configured offline regression suites; the updated percentage must be taken from the next completed run. Critical security and orchestration modules still need substantially higher branch coverage. |
 | Provider and network integrations are not fully exercised in offline CI | Medium–High | Offline tests deliberately deselect network-, LLM-, and slow-marked cases. Live integration and quality benchmarks must be run separately with authorized credentials. |
 | Lockfile, deployment configuration, dependencies, and upstream integration | Medium–High | Must be reviewed for the actual deployment. A vendored source tree or dependency installation does not prove complete integration or secure configuration. |
 
@@ -32,7 +32,11 @@ The former v1.7 report described Alberto as “safe for production” and assign
 - Skills are routed through the configured sandbox, with regression tests for nonzero exits.
 - URL-fetch security has regression coverage for SSRF-related cases.
 - `ALBERTO_REQUIRE_DOCKER` is enforced during agent initialization: if enabled, a conflicting explicit sandbox mode fails closed rather than silently falling back to host execution.
-- Tests were added for the required-Docker configuration path.
+- File-write, write, edit, and memory-write paths now fail closed if the NemoClaw security-policy module cannot be loaded, instead of silently bypassing checks.
+- Shell timeout parsing rejects malformed, null, boolean, fractional, zero, negative, and over-limit values before execution.
+- Self-healing stops after the first successful fixer to avoid applying unrelated repairs after success.
+- The live benchmark excludes Alberto's local provider-error fallback text from model-quality scoring.
+- Tests were added for the required-Docker configuration path, fail-closed write policy, timeout validation, first-success recovery, and benchmark error classification.
 
 These changes address specific code paths; they do not establish that all tools share the same controls or that every upstream tool follows the same policy. Verify each execution route in the deployed configuration.
 
