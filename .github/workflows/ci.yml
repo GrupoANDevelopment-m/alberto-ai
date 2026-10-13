@@ -39,7 +39,7 @@ jobs:
           NVIDIA_API_KEY: "test-key-disabled"
           ALBERTO_OFFLINE: "1"
         run: |
-          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_self_healing_safety.py tests/test_multiedit_security.py tests/test_alberto_cli_tool_security.py tests/test_v184_sandbox.py tests/test_security_policy_fail_closed.py tests/test_sandbox_config.py tests/test_skill_execution_security.py tests/test_webfetch_ssrf.py tests/test_shell_sandbox_routing.py tests/test_hermes_sandbox_routing.py tests/test_benchmark_alberto.py tests/test_no_embedded_credentials.py -v --tb=short
+          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_self_healing_safety.py tests/test_multiedit_security.py tests/test_alberto_cli_tool_security.py tests/test_v184_sandbox.py tests/test_security_policy_fail_closed.py tests/test_sandbox_config.py tests/test_skill_execution_security.py tests/test_webfetch_ssrf.py tests/test_shell_sandbox_routing.py tests/test_hermes_sandbox_routing.py tests/test_function_caller_hardening.py tests/test_benchmark_alberto.py tests/test_no_embedded_credentials.py -v --tb=short
 
       - name: Run CLI smoke tests
         run: |
@@ -61,7 +61,7 @@ jobs:
           NVIDIA_API_KEY: ""
           OPENAI_API_KEY: ""
         run: |
-          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_self_healing_safety.py tests/test_multiedit_security.py tests/test_alberto_cli_tool_security.py tests/test_v184_sandbox.py tests/test_security_policy_fail_closed.py tests/test_sandbox_config.py tests/test_skill_execution_security.py tests/test_webfetch_ssrf.py tests/test_shell_sandbox_routing.py tests/test_hermes_sandbox_routing.py tests/test_benchmark_alberto.py tests/test_no_embedded_credentials.py tests/test_cli_smoke.py tests/test_meta.py tests/test_v15_real.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py \
+          python -m pytest tests/test_v15_unit.py tests/test_v15_components.py tests/test_v17_security.py tests/test_file_read_security.py tests/test_self_healing_control.py tests/test_self_healing_safety.py tests/test_multiedit_security.py tests/test_alberto_cli_tool_security.py tests/test_v184_sandbox.py tests/test_security_policy_fail_closed.py tests/test_sandbox_config.py tests/test_skill_execution_security.py tests/test_webfetch_ssrf.py tests/test_shell_sandbox_routing.py tests/test_hermes_sandbox_routing.py tests/test_function_caller_hardening.py tests/test_benchmark_alberto.py tests/test_no_embedded_credentials.py tests/test_cli_smoke.py tests/test_meta.py tests/test_v15_real.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py \
             -m "not network and not llm and not slow" --cov=alberto --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml
 
       - name: Upload coverage to Codecov
