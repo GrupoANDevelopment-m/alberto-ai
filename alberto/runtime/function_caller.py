@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.request
 import shlex
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
