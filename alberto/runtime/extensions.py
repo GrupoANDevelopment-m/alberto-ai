@@ -132,17 +132,25 @@ class ExtensionInstaller:
                 shutil.copytree(src, target)
             else:
                 shutil.copy(src, target)
-        elif source.startswith(("http://", "https://", "git@")):
-            # Git clone
+        elif source.startswith(("https://", "git@")):
+            # Avoid plaintext Git transport and disable interactive credential prompts.
             if target.exists():
                 shutil.rmtree(target)
-            subprocess.run(["git", "clone", "--depth=1", source, str(target)],
-                           check=True, capture_output=True)
+            git_env = dict(__import__("os").environ, GIT_TERMINAL_PROMPT="0")
+            subprocess.run(
+                ["git", "clone", "--depth=1", source, str(target)],
+                check=True, capture_output=True, timeout=120, env=git_env,
+            )
+        elif source.startswith("http://"):
+            raise ValueError("insecure http:// extension sources are not allowed; use HTTPS")
         elif source.startswith("skill:"):
-            # Built-in skill
+            # Built-in skill names must remain confined to the repository skills root.
             skill_name = source[len("skill:"):]
-            src = self.local_skills / skill_name
-            if not src.exists():
+            skill_root = self.local_skills.resolve()
+            src = (skill_root / skill_name).resolve()
+            if not src.is_relative_to(skill_root):
+                raise ValueError("built-in skill source escapes the skills directory")
+            if not src.exists() or not src.is_dir():
                 raise FileNotFoundError(f"built-in skill {skill_name} not found")
             if target.exists():
                 shutil.rmtree(target)
