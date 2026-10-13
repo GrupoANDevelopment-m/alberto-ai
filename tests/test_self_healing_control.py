@@ -67,3 +67,31 @@ def test_auto_apply_true_executes_matching_repair():
     assert len(result["actions"]) == 1
     assert len(calls) == 1
     assert learner.lessons == []
+
+
+def test_tool_heal_attempt_rejects_non_boolean_auto_apply():
+    healer, learner, calls = make_healer()
+    alberto = SimpleNamespace(healer=healer)
+
+    output, is_error = tool_heal_attempt(
+        alberto, {"error": "recoverable failure", "auto_apply": "false"}
+    )
+
+    assert is_error is True
+    assert "must be a boolean" in output
+    assert calls == []
+    assert learner.lessons == []
+
+
+def test_tool_heal_attempt_applies_only_when_explicitly_true():
+    healer, learner, calls = make_healer()
+    alberto = SimpleNamespace(healer=healer)
+
+    output, is_error = tool_heal_attempt(
+        alberto, {"error": "recoverable failure", "auto_apply": True}
+    )
+
+    assert is_error is False
+    assert "FIXED" in output
+    assert len(calls) == 1
+    assert learner.lessons == []
