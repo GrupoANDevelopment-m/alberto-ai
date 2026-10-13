@@ -87,6 +87,19 @@ import re as _re_security
 _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
+def _validated_shell_timeout(value, *, default: int = 30, maximum: int = 3600):
+    """Parse a tool-provided timeout without leaking conversion errors or unbounded waits."""
+    if value is None:
+        value = default
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if timeout < 1 or timeout > maximum:
+        return None
+    return timeout
+
+
 def _execute_shell_command(alberto, command: str, timeout: int):
     """Run shell commands only through the configured sandbox; fail closed."""
     sandbox = getattr(alberto, "sandbox", None)
@@ -113,7 +126,9 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     SECURITY (v1.7): Blocked-shell-pattern check applied.
     """
     cmd = args.get("command", "")
-    timeout = int(args.get("timeout", 30))
+    timeout = _validated_shell_timeout(args.get("timeout", 30))
+    if timeout is None:
+        return "invalid timeout: expected an integer from 1 to 3600 seconds", True
     if not cmd:
         return "no command provided", True
     blocked_match = _BLOCKED_RE.search(cmd)
@@ -356,7 +371,9 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
     """MiMo bash.ts equivalent — execute a shell command, return stdout/stderr/exit code.
     Args: command (str), timeout (int, default 30), description (str, optional)."""
     cmd = args.get("command", "")
-    timeout = int(args.get("timeout", 30))
+    timeout = _validated_shell_timeout(args.get("timeout", 30))
+    if timeout is None:
+        return "invalid timeout: expected an integer from 1 to 3600 seconds", True
     if not cmd:
         return "no command provided", True
     # NemoClaw: block dangerous read commands (cat ~/.ssh, /etc/shadow, etc)
