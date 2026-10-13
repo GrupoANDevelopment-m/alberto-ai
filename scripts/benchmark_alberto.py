@@ -135,6 +135,15 @@ def score_response(task: Dict[str, Any], response: str) -> bool:
     raise ValueError(f"unknown scorer: {scorer}")
 
 
+def is_model_response(response: str, strategy: Any, error: Any = None) -> bool:
+    """Reject local provider-error fallbacks from model-quality scoring."""
+    if error:
+        return False
+    if not strategy:
+        return False
+    return not response.lstrip().startswith("[sem modelo configurado pra task=")
+
+
 def _percentile(values: List[float], p: float):
     if not values:
         return None
@@ -202,7 +211,7 @@ def run_benchmark(repeats: int = 1, pause_seconds: float = 0.25) -> Dict[str, An
                     latency_ms = (time.perf_counter() - started) * 1000
                     response = str(result.get("response", "") or "")
                     strategy = result.get("strategy")
-                    model_used = bool(strategy)
+                    model_used = is_model_response(response, strategy, result.get("error"))
                     record.update({
                         "response": response,
                         "model_used": model_used,
