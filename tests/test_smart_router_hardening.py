@@ -167,3 +167,13 @@ def test_load_specs_from_alberto_maps_pricing_and_fallbacks(tmp_path):
     assert [s.model_id for s in r.specs] == ["gpt-4o", "claude-3"]
     assert r.specs[0].cost_per_1k_input == 0.03
     assert r.specs[1].cost_per_1k_output == 0.024
+
+
+
+def test_success_clears_stale_provider_error(tmp_path):
+    r = router(tmp_path)
+    s = spec("recovered")
+    r.stats["recovered"] = ModelStats(calls=1, failures=1, last_error="previous timeout")
+    r._record_success(s, {"input_tokens": 0, "output_tokens": 0}, 10)
+    assert r.stats["recovered"].last_error == ""
+    assert r.stats["recovered"].successes == 1
