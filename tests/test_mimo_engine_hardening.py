@@ -98,3 +98,66 @@ def test_memory_upsert_is_searchable_and_does_not_break_updates(tmp_path):
         assert any(entry["key"] == "project.goal" for entry in entries)
     finally:
         engine.stop()
+
+def test_build_uses_real_upstream_workspace_entrypoint(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import alberto.engines.mimo as mimo_module
+
+    home = tmp_path / "home"
+    home.mkdir()
+    upstream = tmp_path / "upstream-mimo"
+    entry = upstream / "packages" / "opencode" / "src" / "index.ts"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("export {}\n")
+    engine = MiMoEngine(SimpleNamespace(home=lambda: home), FakeRouter(),
+                        mimo_home=home / ".mimo", auto_build=False)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        target = Path(args[args.index("--outfile") + 1])
+        target.write_text("#!/bin/sh\nexit 0\n")
+        target.chmod(0o700)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mimo_module, "upstream_path", lambda _path: upstream)
+    monkeypatch.setattr(mimo_module.shutil, "which", lambda name: "/usr/bin/bun" if name == "bun" else None)
+    monkeypatch.setattr(mimo_module.subprocess, "run", fake_run)
+    try:
+        engine._try_build_binary()
+        assert engine.binary == str(home / ".mimo" / "bin" / "mimo")
+        args, kwargs = calls[0]
+        assert str(entry) in args
+        assert kwargs["cwd"] == str(upstream)
+        assert kwargs["timeout"] == 180
+    finally:
+        engine.stop()
+
+
+def test_failed_mimo_build_does_not_adopt_partial_output(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import alberto.engines.mimo as mimo_module
+
+    home = tmp_path / "home"
+    home.mkdir()
+    upstream = tmp_path / "upstream-mimo"
+    entry = upstream / "packages" / "opencode" / "src" / "index.ts"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("export {}\n")
+    engine = MiMoEngine(SimpleNamespace(home=lambda: home), FakeRouter(),
+                        mimo_home=home / ".mimo", auto_build=False)
+
+    def fake_run(args, **kwargs):
+        target = Path(args[args.index("--outfile") + 1])
+        target.write_text("partial")
+        target.chmod(0o700)
+        return SimpleNamespace(returncode=1, stdout="", stderr="build failed")
+
+    monkeypatch.setattr(mimo_module, "upstream_path", lambda _path: upstream)
+    monkeypatch.setattr(mimo_module.shutil, "which", lambda name: "/usr/bin/bun" if name == "bun" else None)
+    monkeypatch.setattr(mimo_module.subprocess, "run", fake_run)
+    try:
+        engine._try_build_binary()
+        assert engine.binary is None
+    finally:
+        engine.stop()
