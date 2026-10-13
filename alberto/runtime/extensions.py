@@ -25,6 +25,17 @@ from typing import Any, Dict, List, Optional
 EXT_TYPES = ("skill", "plugin", "mcp", "provider", "persona", "squad")
 
 
+def _validate_path_component(value: str, label: str) -> str:
+    """Reject path traversal and separators for extension/category identifiers."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty path component")
+    if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(f"invalid {label}: expected a single path component")
+    if Path(value).name != value:
+        raise ValueError(f"invalid {label}: expected a single path component")
+    return value
+
+
 @dataclass
 class Extension:
     name: str
@@ -78,7 +89,9 @@ class ExtensionInstaller:
         - a git url
         - a registry name (skill:<name> for built-in skills)
         """
-        import time
+        name = _validate_path_component(name, "extension name")
+        if ext_type not in EXT_TYPES:
+            raise ValueError(f"unsupported extension type: {ext_type}")
         ext = Extension(
             name=name, ext_type=ext_type, version=version,
             source=source, description=description, installed_at=time.time(),
@@ -152,7 +165,12 @@ class ExtensionInstaller:
     def create_skill(self, name: str, *, description: str, content: str,
                      category: str = "user") -> Path:
         """Create a new skill from scratch and install it locally."""
-        target = self.local_skills / category / name
+        category = _validate_path_component(category, "skill category")
+        name = _validate_path_component(name, "skill name")
+        target = (self.local_skills / category / name).resolve()
+        skills_root = self.local_skills.resolve()
+        if not target.is_relative_to(skills_root):
+            raise ValueError("skill path escapes the local skills directory")
         target.mkdir(parents=True, exist_ok=True)
         skill_md = target / "SKILL.md"
         skill_md.write_text(f"""---
