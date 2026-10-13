@@ -89,6 +89,25 @@ def test_run_aiox_workflow_reports_missing_workflow():
     assert "not found" in result["error"]
 
 
+def test_run_aiox_workflow_never_reports_skipped_steps_as_success():
+    workflows = integration.list_aiox_workflows()
+    if not workflows:
+        pytest.skip("No AIOX workflow YAML files in this checkout")
+    # list_aiox_workflows returns filenames including the YAML extension.
+    result = integration.run_aiox_workflow(workflows[0], None)
+    assert result["ok"] is False
+    assert result["status"] == "not_executed"
+    assert result["workflow"].endswith((".yaml", ".yml"))
+    assert "not executed" in result["error"].lower()
+    assert all(step["status"] == "not_executed" for step in result["steps"])
+
+
+def test_run_aiox_workflow_rejects_path_traversal():
+    result = integration.run_aiox_workflow("../../README", None)
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+
+
 @pytest.mark.parametrize(
     ("returncode", "expected"),
     [(0, True), (1, False)],
