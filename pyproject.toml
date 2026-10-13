@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alberto-ai"
+version = "1.8.4"
+description = "Modular AI agent framework with tool orchestration, memory, skills, and configurable sandbox execution."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+alberto = "alberto.cli:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alberto*"]
+
+[tool.setuptools]
+script-files = ["bin/alberto-serve"]
