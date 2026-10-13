@@ -88,3 +88,19 @@ def test_terminal_reports_nonzero_exit_as_failure(tmp_path):
 
     assert result["ok"] is False
     assert result["returncode"] == 2
+
+
+def test_browser_rejects_private_target_before_importing_browser_tool(monkeypatch):
+    monkeypatch.setattr(
+        hermes_tools,
+        "_try_import",
+        lambda name: (_ for _ in ()).throw(AssertionError("unsafe target must be rejected first")),
+    )
+
+    result = hermes_tools.tool_browser(
+        SimpleNamespace(),
+        {"url": "http://127.0.0.1/admin"},
+    )
+
+    assert result["ok"] is False
+    assert "unsafe browser URL" in result["error"]
