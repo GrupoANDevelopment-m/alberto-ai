@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.request
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -553,7 +554,7 @@ def _validate_public_web_url(url: str):
     return parsed
 
 
-class _SafeWebRedirectHandler(__import__("urllib.request", fromlist=["HTTPRedirectHandler"]).HTTPRedirectHandler):
+class _SafeWebRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Re-validate every redirect to prevent redirects into local networks."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
