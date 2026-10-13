@@ -23,13 +23,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-REPO = Path("/workspace/alberto-ai")
+REPO = Path(__file__).resolve().parents[1]
 os.chdir(REPO)
 
 ENV = os.environ.copy()
 ENV.update({
     "PYTHONPATH": str(REPO) + os.pathsep + ENV.get("PYTHONPATH", ""),
 })
+# This suite is the live acceptance test; never let a caller accidentally force
+# the real-provider checks into offline mode through an inherited environment.
+ENV.pop("ALBERTO_OFFLINE", None)
 
 
 def run_cli(args, timeout=60):
@@ -245,7 +248,8 @@ def main():
     else:
         print("  ❌ MAJOR ISSUES")
     print("=" * 70)
-    return 0 if passed >= 9 else 1
+    # Acceptance is intentionally strict: partial capability success is a failure.
+    return 0 if passed == total else 1
 
 
 if __name__ == "__main__":
