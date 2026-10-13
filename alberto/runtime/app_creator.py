@@ -43,6 +43,8 @@ class AppCreator:
             return {"ok": False, "error": "name must be a 1-64 character slug (letters, digits, _ or -)"}
         if not isinstance(description, str) or len(description) > 4000:
             return {"ok": False, "error": "description must be text of at most 4000 characters"}
+        if stack != "react-vite-fastapi":
+            return {"ok": False, "error": "unsupported stack; supported stack: react-vite-fastapi"}
         app_dir = self.output_dir / name
         if app_dir.exists():
             return {"ok": False, "error": f"app {name} already exists at {app_dir}"}
@@ -54,8 +56,25 @@ class AppCreator:
         self._scaffold_frontend(app_dir / "frontend", name, description)
         # Backend: FastAPI
         self._scaffold_backend(app_dir / "backend", name, description)
+        # Container definitions are required for the generated compose file to build.
+        (app_dir / "frontend" / "Dockerfile").write_text("""FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --no-audit --no-fund
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+""")
+        (app_dir / "backend" / "Dockerfile").write_text("""FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY main.py ./
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+""")
         # docker-compose
-        (app_dir / "docker-compose.yml").write_text(self._docker_compose(name))
         # README
         (app_dir / "README.md").write_text(self._readme(name, description))
 
