@@ -230,16 +230,41 @@ class SelfHealer:
         return {"fix": "disk_full", "ok": True, "actions": actions}
 
     def _fix_import_error(self, err: str, ctx: str) -> Dict[str, Any]:
-        import re as _re
-        m = _re.search(r"No module named '([^']+)'", err)
-        if not m:
+        match = re.search(r"No module named '([^']+)'", err)
+        if not match:
             return {"fix": "import_error", "ok": False, "reason": "no module name in error"}
-        module = m.group(1).strip("'\"")
-        # Handle common aliases
-        module = {"yaml": "pyyaml", "PIL": "pillow", "cv2": "opencv-python",
-                  "sklearn": "scikit-learn", "attr": "attrs"}.get(module, module)
-        ok, log = _pip_install(module)
-        return {"fix": "import_error", "ok": ok, "module": module, "log": log}
+
+        module = match.group(1).split(".", 1)[0].strip()
+        approved_packages = {
+            "yaml": "pyyaml",
+            "PIL": "pillow",
+            "cv2": "opencv-python",
+            "sklearn": "scikit-learn",
+            "attr": "attrs",
+            "fastapi": "fastapi",
+            "uvicorn": "uvicorn",
+            "pydantic": "pydantic",
+            "httpx": "httpx",
+            "openai": "openai",
+            "rich": "rich",
+            "crewai": "crewai",
+            "litellm": "litellm",
+            "playwright": "playwright",
+            "requests": "requests",
+            "numpy": "numpy",
+            "networkx": "networkx",
+        }
+        package = approved_packages.get(module)
+        if package is None:
+            return {
+                "fix": "import_error",
+                "ok": False,
+                "module": module,
+                "reason": "automatic installation blocked: module is not in the approved package allowlist",
+            }
+
+        ok, log = _pip_install(package)
+        return {"fix": "import_error", "ok": ok, "module": module, "package": package, "log": log}
 
     def _fix_yaml_missing(self, err: str, ctx: str) -> Dict[str, Any]:
         ok, log = _pip_install("pyyaml")
@@ -265,18 +290,36 @@ class SelfHealer:
         return {"fix": "port_in_use", "ok": True, "new_port": free_port}
 
     def _fix_memory_leak(self, err: str, ctx: str) -> Dict[str, Any]:
+        """Prune old memory only after a private backup has been written."""
         try:
             entries = self.alberto.mimo.memory_list()
-            if len(entries) > 100:
-                recent = sorted(entries, key=lambda e: e.get("updated_at", 0), reverse=True)[:50]
-                kept_keys = {e["key"] for e in recent}
-                removed = 0
-                for e in entries:
-                    if e["key"] not in kept_keys:
-                        self.alberto.mimo.memory_delete(e["key"])
-                        removed += 1
-                return {"fix": "memory_leak", "ok": True, "kept": 50, "removed": removed}
-            return {"fix": "memory_leak", "ok": True, "kept": len(entries)}
+            if len(entries) <= 100:
+                return {"fix": "memory_leak", "ok": True, "kept": len(entries)}
+
+            recent = sorted(
+                entries,
+                key=lambda entry: entry.get("updated_at", 0),
+                reverse=True,
+            )[:50]
+            kept_keys = {entry["key"] for entry in recent}
+            backup = self.heal_log.parent / f"memory-backup-{time.time_ns()}.json"
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(backup), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(entries, stream, ensure_ascii=False, default=str)
+
+            removed = 0
+            for entry in entries:
+                if entry["key"] not in kept_keys:
+                    self.alberto.mimo.memory_delete(entry["key"])
+                    removed += 1
+            return {
+                "fix": "memory_leak",
+                "ok": True,
+                "kept": len(kept_keys),
+                "removed": removed,
+                "backup": str(backup),
+            }
         except Exception as e:
             return {"fix": "memory_leak", "ok": False, "error": str(e)}
 
