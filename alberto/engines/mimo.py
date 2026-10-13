@@ -304,11 +304,29 @@ class MiMoEngine:
                 except Exception as e:
                     candidates.append(f"[error] {e}")
         scored = []
-        for i, c in enumerate(candidates):
-            v = self.judge(c)
-            scored.append({"index": i, "verdict": v, "content": c})
-        scored.sort(key=lambda x: x["verdict"].get("score", 0), reverse=True)
-        return {"winner": scored[0], "all": scored}
+        for i, candidate in enumerate(candidates):
+            if not candidate.strip() or candidate.startswith("[error]"):
+                scored.append({
+                    "index": i, "verdict": {"verdict": "fail", "score": 0.0,
+                    "reason": "candidate generation failed"}, "content": candidate,
+                })
+                continue
+            verdict = self.judge(candidate)
+            scored.append({"index": i, "verdict": verdict, "content": candidate})
+        successful = [item for item in scored if not item["content"].startswith("[error]")
+                      and item["content"].strip()]
+        if not successful:
+            return {
+                "ok": False,
+                "error": "all candidate generations failed",
+                "winner": {"content": "[max mode failed: all candidate generations failed]"},
+                "all": scored,
+            }
+        scored.sort(key=lambda item: (
+            item["verdict"].get("verdict") == "pass",
+            float(item["verdict"].get("score", 0.0)),
+        ), reverse=True)
+        return {"ok": True, "winner": scored[0], "all": scored}
 
     # ===== Compose =====
     def compose(self, spec: str, *, steps: Optional[List[str]] = None) -> Dict:
