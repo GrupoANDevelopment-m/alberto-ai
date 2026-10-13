@@ -61,4 +61,5 @@ def test_grep_skips_symlink_to_protected_file(tmp_path):
 
     output, is_error = tool_grep(None, {"pattern": "root:", "path": str(tmp_path)})
     assert is_error is False
-    assert "root:" not in output
+    assert "no matches" in output
+    assert "root:x:0:0" not in output
