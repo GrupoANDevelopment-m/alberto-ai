@@ -5,6 +5,7 @@ Bundles real upstream engines (MiMo, Hermes) with Alberto's chat layer.
 """
 from __future__ import annotations
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -51,7 +52,11 @@ class Alberto:
                  config: Optional[ModelConfig] = None,
                  catalog_dir: Optional[Path] = None,
                  personas_dir: Optional[Path] = None):
-        self.sandbox = sandbox or LocalSandbox()
+        if sandbox is not None:
+            self.sandbox = sandbox
+        else:
+            sandbox_kind = os.environ.get("ALBERTO_SANDBOX_KIND", "local").strip().lower()
+            self.sandbox = make_sandbox(sandbox_kind)
         self.router = ModelRouter(self._load_or_init_config())
         self.mimo = MiMoEngine(self.sandbox, self.router)
         self.hermes = HermesEngine(self.sandbox, mimo=self.mimo)
