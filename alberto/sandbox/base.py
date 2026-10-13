@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import shutil
 import shlex
+import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Protocol
 
@@ -112,18 +113,13 @@ class LocalSandbox:
 
 
 class NemoClawSandbox:
-    """NemoClaw-compatible sandbox with hermetic isolation.
+    """Docker-backed sandbox with an explicitly identified host fallback.
 
-    Real implementation: even without Docker, this provides:
-    - Isolated tmpfs at /tmp/alberto-sandbox-{uuid}
-    - Path allowlist (cannot escape sandbox via ..)
-    - Network isolation (unshare if available, else warning)
-    - Per-sandbox env vars (no leak to host)
-    - Resource limits (timeout, memory cap)
-    - Cleanup of UUID-prefixed dirs only
-
-    If Docker is available, uses docker SDK for true container isolation.
-    Falls back to hermetic local sandbox otherwise.
+    Docker mode applies container isolation, a read-only root filesystem,
+    a restricted user, no network, and resource limits. If Docker is
+    unavailable, the compatibility fallback runs subprocesses on the host;
+    it is NOT an OS security boundary. The fallback exists for development
+    compatibility only and is reported through isolation_level.
     """
 
     _docker_available = None
@@ -137,12 +133,18 @@ class NemoClawSandbox:
             try:
                 self._init_docker()
                 self._mode = "docker"
+                self.isolation_level = "docker-container"
                 return
             except Exception as e:
-                sys.stderr.write(f"[NemoClawSandbox] Docker init failed, using hermetic local: {e}\n")
-        # Fallback: hermetic local
-        self._init_hermetic()
-        self._mode = "hermetic"
+                sys.stderr.write(f"[NemoClawSandbox] Docker init failed: {e}\n")
+        # Compatibility fallback: commands execute on the host, not in a container.
+        self._init_host_fallback()
+        self._mode = "host-fallback"
+        self.isolation_level = "host-process"
+        sys.stderr.write(
+            "[NemoClawSandbox] WARNING: Docker isolation unavailable; "
+            "fallback runs commands on the host and is not a security sandbox.\n"
+        )
 
     def _has_docker(self) -> bool:
         if NemoClawSandbox._docker_available is not None:
@@ -179,23 +181,12 @@ class NemoClawSandbox:
         )
         self._client = client
 
-    def _init_hermetic(self):
-        """Initialize hermetic local sandbox (no Docker required)."""
-        import tempfile, uuid as _uuid
-        # Create UUID-isolated directory
+    def _init_host_fallback(self):
+        """Initialize a per-instance working directory; this does not isolate the OS."""
+        import tempfile
         self._base = Path(tempfile.gettempdir()) / f"alberto-sandbox-{self._id}"
         self._base.mkdir(parents=True, exist_ok=True)
-        # Create home subdir
         (self._base / "home").mkdir(exist_ok=True)
-        # Try to disable network via unshare (Linux only)
-        self._has_unshare = False
-        try:
-            import subprocess
-            r = subprocess.run(["unshare", "--help"], capture_output=True, timeout=2)
-            if r.returncode == 0 or "unshare" in r.stderr.decode() + r.stdout.decode():
-                self._has_unshare = True
-        except Exception:
-            pass
 
     def home(self) -> Path:
         """Return the sandbox home directory."""
@@ -204,48 +195,77 @@ class NemoClawSandbox:
         return self._base / "home"
 
     def _resolve_safe(self, path: Path) -> Path:
-        """Resolve a path, ensuring it stays within the sandbox."""
-        if path.is_absolute() and self._mode == "hermetic":
-            # Block path traversal outside sandbox
+        """Resolve paths inside sandbox home and safely redirect escapes.
+
+        Resolve symlinks before checking containment. If the redirected
+        basename is itself a symlink outside the sandbox, reject it.
+        """
+        raw = Path(path).expanduser()
+        root = self.home().resolve()
+        candidate = raw if raw.is_absolute() else root / raw
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            redirected = root / candidate.name
+            safe_redirect = redirected.resolve()
             try:
-                path.relative_to(self._base)
+                safe_redirect.relative_to(root)
             except ValueError:
-                # Path is outside sandbox - redirect to sandbox
-                rel = path.name
-                return self._base / "home" / rel
-        return path
+                raise ValueError(f"path escapes sandbox home: {path}")
+            return safe_redirect
 
     def run(self, cmd, **kwargs):
-        """Run a shell command in the sandbox.
+        """Run a command and always return subprocess.CompletedProcess.
 
-        In docker mode: exec into container with no network, limited resources.
-        In hermetic mode: subprocess with chroot-like constraints.
+        String commands retain shell semantics for compatibility. Lists/tuples
+        execute directly without a shell. Docker commands use the container
+        timeout utility to enforce the requested timeout inside the container.
         """
         import subprocess
-        timeout = kwargs.get("timeout", 60)
+        timeout = max(1, int(kwargs.get("timeout", 60)))
+        cwd_arg = kwargs.get("cwd", self.home())
+        cwd = str(self._resolve_safe(Path(cwd_arg)))
+
         if self._mode == "docker":
+            if isinstance(cmd, str):
+                command = ["/bin/sh", "-lc", cmd]
+            else:
+                command = [str(part) for part in cmd]
+            if not command:
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            command = ["timeout", f"{timeout}s", *command]
             try:
-                r = self._container.exec_run(
-                    cmd, stdout=True, stderr=True, user="1000:1000"
+                result = self._container.exec_run(
+                    command, stdout=True, stderr=True, user="1000:1000",
+                    workdir=cwd, demux=True,
                 )
-                class _R:
-                    def __init__(self, output): self.output = output
-                return _R(r.output.decode("utf-8", errors="replace"))
+                output = result.output
+                if isinstance(output, tuple):
+                    stdout, stderr = output
+                else:
+                    stdout, stderr = output, b""
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=result.exit_code,
+                    stdout=(stdout or b"").decode("utf-8", errors="replace"),
+                    stderr=(stderr or b"").decode("utf-8", errors="replace"),
+                )
             except Exception as e:
-                raise RuntimeError(f"docker exec failed: {e}")
-        # Hermetic: subprocess with cwd in sandbox
-        cwd = kwargs.get("cwd", str(self._base))
+                raise RuntimeError(f"docker exec failed: {e}") from e
+
+        shell = isinstance(cmd, str)
         return subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=cwd
+            cmd, shell=shell, capture_output=True, text=True, timeout=timeout, cwd=cwd,
         )
 
     def write(self, path: Path, content: str) -> None:
         """Write a file inside the sandbox."""
         safe = self._resolve_safe(path)
-        safe.parent.mkdir(parents=True, exist_ok=True)
         if self._mode == "docker":
             import tarfile, io
-            # Write via tar stream into container
+            self._container.exec_run(["mkdir", "-p", str(safe.parent)],
+                                     stdout=True, stderr=True, user="1000:1000")
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode="w") as tar:
                 data = content.encode("utf-8")
@@ -255,6 +275,7 @@ class NemoClawSandbox:
             tar_stream.seek(0)
             self._container.put_archive("/", tar_stream.read())
             return
+        safe.parent.mkdir(parents=True, exist_ok=True)
         safe.write_text(content, encoding="utf-8")
 
     def read(self, path: Path) -> str:
