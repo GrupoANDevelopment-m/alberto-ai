@@ -91,13 +91,42 @@ def write_lock(pidfile: Path, pid: int):
     pidfile.write_text(str(pid))
 
 
-def kill_alberto_serves():
-    """Kill any existing alberto serve/alberto-serve processes."""
-    subprocess.run(["pkill", "-9", "-f", "alberto.cli serve"],
-                  capture_output=True, timeout=5)
-    subprocess.run(["pkill", "-9", "-f", "bin/alberto-serve"],
-                  capture_output=True, timeout=5)
-    time.sleep(1)
+_ACTIVE_SERVER_PROC = None
+
+
+def kill_alberto_serves(pidfile: Path):
+    """Stop only the process recorded in this launcher's PID file."""
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (OSError, ValueError):
+        pidfile.unlink(missing_ok=True)
+        return
+    if pid == os.getpid():
+        raise RuntimeError("refusing to terminate the current launcher process")
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    try:
+        cmdline = cmdline_path.read_bytes().replace(b"\\x00", b" ").decode(errors="replace")
+    except OSError as exc:
+        raise RuntimeError("cannot verify existing server process; refusing to kill it") from exc
+    if "alberto-serve" not in cmdline and "alberto.cli serve" not in cmdline:
+        raise RuntimeError("PID file does not point to an Alberto server; refusing to kill it")
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+        time.sleep(0.1)
+    else:
+        # Re-check the process identity before escalating to SIGKILL.
+        try:
+            current = cmdline_path.read_bytes().replace(b"\\x00", b" ").decode(errors="replace")
+        except OSError:
+            current = ""
+        if ("alberto-serve" in current or "alberto.cli serve" in current):
+            os.kill(pid, signal.SIGKILL)
+    pidfile.unlink(missing_ok=True)
 
 
 def wait_for_health(port: int, timeout: float = 15.0) -> bool:
@@ -136,16 +165,21 @@ def run_one(port: int, host: str = "0.0.0.0") -> int:
     cmd = [sys.executable, "-m", "alberto.cli", "serve",
            "--host", host, "--port", str(port)]
     print(f"[alberto-serve] starting: {' '.join(cmd)}", flush=True)
+    global _ACTIVE_SERVER_PROC
     proc = subprocess.Popen(cmd, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            text=True, bufsize=1)
-    # Stream output
-    for line in proc.stdout:
-        print(line, end="", flush=True)
-        if "Uvicorn running" in line or "Application startup complete" in line:
-            print(f"[alberto-serve] ✓ server up on port {port}", flush=True)
-    proc.wait()
-    return proc.returncode
+    _ACTIVE_SERVER_PROC = proc
+    try:
+        # Stream output
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            if "Uvicorn running" in line or "Application startup complete" in line:
+                print(f"[alberto-serve] ✓ server up on port {port}", flush=True)
+        proc.wait()
+        return proc.returncode
+    finally:
+        _ACTIVE_SERVER_PROC = None
 
 
 def watchdog_loop(port: int, max_restarts: int, host: str):
@@ -163,21 +197,28 @@ def watchdog_loop(port: int, max_restarts: int, host: str):
             print(f"[alberto-serve] ✗ crashed {restarts} times (>max {max_restarts}); giving up",
                   file=sys.stderr, flush=True)
             sys.exit(1)
-        # Run self-heal on the crash
-        try:
-            from alberto import Alberto
-            from alberto.runtime.self_healing import SelfHealer
-            a = Alberto()
-            sh = SelfHealer(a)
-            heal = sh.attempt_heal(
-                Exception(f"server crashed with exit code {rc}"),
-                context="server_watchdog"
-            )
-            print(f"[alberto-serve] heal result: fixed={heal.get('fixed')}, "
-                  f"fixers={heal.get('matched_fixers', [])}", flush=True)
-            a.shutdown()
-        except Exception as e:
-            print(f"[alberto-serve] heal attempt failed: {e}", file=sys.stderr, flush=True)
+        # Self-healing may mutate files/configuration; production requires explicit opt-in.
+        production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        allow_auto_heal = os.environ.get("ALBERTO_AUTO_HEAL", "").strip() == "1"
+        if not production or allow_auto_heal:
+            try:
+                from alberto import Alberto
+                from alberto.runtime.self_healing import SelfHealer
+                a = Alberto()
+                sh = SelfHealer(a)
+                heal = sh.attempt_heal(
+                    Exception(f"server crashed with exit code {rc}"),
+                    context="server_watchdog"
+                )
+                print(f"[alberto-serve] heal result: fixed={heal.get('fixed')}, "
+                      f"fixers={heal.get('matched_fixers', [])}", flush=True)
+                a.shutdown()
+            except Exception as e:
+                print(f"[alberto-serve] heal attempt failed: {e}", file=sys.stderr, flush=True)
+        else:
+            print("[alberto-serve] production mode: automatic self-healing disabled; "
+                  "set ALBERTO_AUTO_HEAL=1 only after reviewing mutation policy",
+                  file=sys.stderr, flush=True)
         # Backoff before restart
         backoff = min(2 ** restarts, 30)
         print(f"[alberto-serve] restarting in {backoff}s (attempt {restarts})", flush=True)
@@ -235,7 +276,14 @@ def main():
     # Step 6: signal handling
     def shutdown(signum, frame):
         print(f"[alberto-serve] received signal {signum}, shutting down", flush=True)
-        kill_alberto_serves()
+        proc = _ACTIVE_SERVER_PROC
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
         pidfile.unlink(missing_ok=True)
         sys.exit(0)
     signal.signal(signal.SIGTERM, shutdown)
