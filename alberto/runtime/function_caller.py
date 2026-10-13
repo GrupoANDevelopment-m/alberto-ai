@@ -201,8 +201,8 @@ def tool_file_write(alberto, args: Dict) -> Tuple[str, bool]:
                 return f"BLOCKED by NemoClaw: {msg_or_path}", True
             content = final_content
             path = msg_or_path
-        except ImportError:
-            pass
+        except ImportError as e:
+            return f"NemoClaw security policy unavailable; refusing write: {e}", True
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
@@ -229,8 +229,8 @@ def tool_memory_set(alberto, args: Dict) -> Tuple[str, bool]:
         if not allowed:
             return f"NemoClaw blocked: {msg}", True
         value = final_value
-    except ImportError:
-        pass
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing memory write: {e}", True
     # Real Hermes memory_tool via bridge
     return _bridge_memory_set(key, value, tags=tags)
 
@@ -461,8 +461,8 @@ def tool_write(alberto, args: Dict) -> Tuple[str, bool]:
         if final_content != content:
             content = final_content  # redacted
         path = safe_path
-    except ImportError:
-        pass
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing write: {e}", True
     except Exception as e:
         return f"NemoClaw check failed: {e}", True
     try:
@@ -491,8 +491,8 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
         if secrets:
             names = list({item["pattern"] for item in secrets})
             return f"NemoClaw blocked edit: new_text contains secrets ({', '.join(names)})", True
-    except ImportError:
-        pass
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing edit: {e}", True
     # Validate the target before reading, then validate the resulting content
     # before writing, using the same sandbox root as the other protected tools.
     try:
@@ -501,8 +501,8 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
         if not allowed:
             return f"NemoClaw blocked: {safe_path}", True
         p = Path(safe_path).expanduser()
-    except ImportError:
-        p = Path(path).expanduser()
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing edit: {e}", True
     except Exception as e:
         return f"NemoClaw check failed: {e}", True
     try:
