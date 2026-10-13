@@ -91,7 +91,10 @@ def substitute_args(text: str, args: List[str], lang: str = "bash") -> str:
         else:
             index = int(index_text)
             selected = args[index:index + 1]
-        return " ".join(encode(value) for value in selected)
+        encoded = [encode(value) for value in selected]
+        if lang in ("python", "python3", "py"):
+            return ", ".join(encoded)
+        return " ".join(encoded)
 
     return re.sub(r"\{\{args(?:\[(\d+)\])?\}\}", replace, text)
 
@@ -146,7 +149,8 @@ def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) ->
     code = substitute_args(primary["code"], args, lang=primary["lang"])
     try:
         if primary["lang"] in ("python", "python3", "py"):
-            cmd = [sys.executable, "-c", code]
+            python_executable = "python3" if getattr(sandbox, "_mode", None) == "docker" else sys.executable
+            cmd = [python_executable, "-c", code]
         else:
             cmd = ["bash", "-c", code]
         result = sandbox.run(cmd, timeout=timeout, cwd=str(sandbox.home()))
