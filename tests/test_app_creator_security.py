@@ -43,7 +43,7 @@ def test_create_scaffolds_expected_files_and_duplicate_is_non_destructive(tmp_pa
     root = Path(result["path"])
     expected = [
         "frontend/package.json", "frontend/index.html", "frontend/src/App.tsx",
-        "backend/main.py", "backend/requirements.txt", "backend/pyproject.toml",
+        "backend/main.py", "backend/requirements.txt", "backend/pyproject.toml", "backend/Dockerfile", "frontend/Dockerfile",
         "docker-compose.yml", "README.md",
     ]
     assert all((root / name).is_file() for name in expected)
@@ -73,3 +73,11 @@ def test_generated_services_bind_to_loopback_by_default(tmp_path):
     backend = (root / "backend" / "main.py").read_text()
     assert 'allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"]' in backend
     assert 'allow_origins=["*"]' not in backend
+
+
+def test_rejects_unsupported_stack_without_creating_files(tmp_path):
+    creator = AppCreator(tmp_path / "apps")
+    result = creator.create("valid-app", "description", stack="unknown-stack")
+    assert result["ok"] is False
+    assert "unsupported stack" in result["error"]
+    assert list((tmp_path / "apps").iterdir()) == []
