@@ -124,3 +124,18 @@ def test_tool_skill_show_uses_content_helper(monkeypatch):
 
     assert is_error is False
     assert output == "skill body"
+
+
+def test_python_args_placeholder_expands_multiple_literals(tmp_path, monkeypatch):
+    skill_path = write_skill(
+        tmp_path,
+        "python-multiple-args",
+        code_block("python", "print({{args}})"),
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path)
+    sandbox = LocalSandbox(base_dir=tmp_path / "sandbox")
+
+    result = skill_engine.run_skill("python-multiple-args", ["alpha", "beta"], sandbox=sandbox)
+
+    assert result["ok"] is True
+    assert result["stdout"] == "alpha beta\n"
