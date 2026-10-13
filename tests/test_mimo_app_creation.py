@@ -14,9 +14,9 @@ def test_mimo_app_create_runs_plan_then_materializes_scaffold(tmp_path):
         def compose(self, spec, *, steps):
             calls.append((spec, steps))
             return {
-                "spec": {"content": "Requirements and architecture"},
-                "tdd": {"content": "Acceptance test plan"},
-                "review": {"content": "Security review"},
+                "spec": {"content": "Requirements and architecture", "verdict": {"verdict": "pass"}},
+                "tdd": {"content": "Acceptance test plan", "verdict": {"verdict": "pass"}},
+                "review": {"content": "Security review", "verdict": {"verdict": "pass"}},
             }
 
     alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
@@ -41,9 +41,9 @@ def test_mimo_app_create_fails_closed_if_planning_step_fails(tmp_path):
     class Mimo:
         def compose(self, spec, *, steps):
             return {
-                "spec": {"content": "requirements"},
-                "tdd": {"content": "[error] provider unavailable"},
-                "review": {"content": "not reached"},
+                "spec": {"content": "requirements", "verdict": {"verdict": "pass"}},
+                "tdd": {"content": "[error] provider unavailable", "verdict": {"verdict": "fail"}},
+                "review": {"content": "not reached", "verdict": {"verdict": "fail"}},
             }
 
     alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
