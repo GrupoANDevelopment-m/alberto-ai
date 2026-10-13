@@ -102,7 +102,7 @@ def test_server_crash_repair_never_kills_processes(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append(args))
 
-    result = healer._fix_server_crash("server crashed", context="manual")
+    result = healer._fix_server_crash("server crashed", ctx="manual")
 
     assert result["ok"] is False
     assert "pkill" not in str(calls)
@@ -112,7 +112,7 @@ def test_server_crash_repair_never_kills_processes(monkeypatch):
 def test_server_watchdog_owns_restart_lifecycle():
     healer = make_healer(SimpleNamespace())
 
-    result = healer._fix_server_crash("server crashed", context="server_watchdog")
+    result = healer._fix_server_crash("server crashed", ctx="server_watchdog")
 
     assert result["ok"] is True
     assert "watchdog" in result["action"]
