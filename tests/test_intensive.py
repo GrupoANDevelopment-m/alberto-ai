@@ -25,8 +25,7 @@ from alberto.upstream_bridge import (
 )
 
 
-NVIDIA_KEY = "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"
-os.environ.setdefault("NVIDIA_API_KEY", NVIDIA_KEY)
+NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
 
 
 # === Discovery ===
@@ -163,7 +162,7 @@ def test_patch_parser_parses(alberto):
 
 def test_threat_patterns_scans(alberto):
     """Threat patterns detects real API keys."""
-    text = "Here's my key: sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMN"
+    text = "Here is a test key: " + "sk-" + ("T" * 48)
     out = invoke_hermes_tool(alberto, "threat_patterns", {"text": text})
     assert out["ok"] is True
     assert any(f["type"] == "openai_key" for f in out.get("findings", []))
