@@ -79,7 +79,7 @@ class AppCreator:
             "name": name, "private": True, "version": "0.1.0",
             "type": "module",
             "scripts": {
-                "dev": "vite --host 0.0.0.0 --port 3000",
+                "dev": "vite --host 127.0.0.1 --port 3000",
                 "build": "tsc && vite build",
                 "preview": "vite preview",
             },
@@ -210,11 +210,11 @@ requires-python = ">=3.10"
 services:
   frontend:
     build: ./frontend
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     depends_on: [backend]
   backend:
     build: ./backend
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
 """
 
     def _readme(self, name: str, description: str) -> str:
@@ -255,7 +255,7 @@ docker compose up
                            str(app_dir / "backend" / "requirements.txt")],
                           check=True, capture_output=True, timeout=120)
             backend_proc = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=app_dir / "backend",
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
