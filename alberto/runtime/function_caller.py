@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.request
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -500,22 +501,86 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
         return f"error: {e}", True
 
 
+def _validate_public_web_url(url: str):
+    """Validate an HTTP(S) URL and reject private, local, and reserved targets."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid URL: {exc}") from exc
+
+    if scheme not in ("http", "https"):
+        raise ValueError("only http and https URLs are allowed")
+    if not hostname:
+        raise ValueError("URL must include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing credentials are not allowed")
+    if port is not None and port not in (80, 443):
+        raise ValueError("only ports 80 and 443 are allowed")
+    if hostname == "localhost" or hostname.endswith(
+        (".localhost", ".local", ".localdomain", ".internal", ".test", ".lan", ".home.arpa")
+    ):
+        raise ValueError("local or internal hostnames are not allowed")
+
+    try:
+        literal = ipaddress.ip_address(hostname)
+        addresses = [literal]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(
+                hostname,
+                port or (443 if scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        except OSError as exc:
+            raise ValueError(f"hostname resolution failed: {exc}") from exc
+        addresses = []
+        for info in infos:
+            try:
+                addresses.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
+            except ValueError:
+                continue
+
+    if not addresses:
+        raise ValueError("hostname did not resolve to an IP address")
+    if any(not address.is_global for address in addresses):
+        raise ValueError("URL resolves to a non-public IP address")
+    return parsed
+
+
+class _SafeWebRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate every redirect to prevent redirects into local networks."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from urllib.parse import urljoin
+        _validate_public_web_url(urljoin(req.full_url, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 @register_tool("webfetch")
 def tool_webfetch(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo webfetch.ts equivalent — fetch a URL and return text content.
-    Args: url (str), max_length (int, default 5000)."""
+    """Fetch public HTTP(S) text content with SSRF and response-size checks."""
     url = args.get("url", "")
-    max_length = int(args.get("max_length", 5000))
     if not url:
         return "no url", True
     try:
         import urllib.request
+        max_length = max(1, min(int(args.get("max_length", 5000)), 100000))
+        _validate_public_web_url(url)
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8", errors="replace")
+        opener = urllib.request.build_opener(_SafeWebRedirectHandler())
+        with opener.open(req, timeout=30) as response:
+            raw = response.read(max_length * 4 + 1)
+        content = raw.decode("utf-8", errors="replace")
         return content[:max_length], False
     except Exception as e:
-        return f"error fetching {url}: {e}", True
+        return f"error fetching URL: {e}", True
 
 
 @register_tool("websearch")
