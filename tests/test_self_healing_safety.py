@@ -177,3 +177,71 @@ def test_import_error_blocks_unapproved_package_install(monkeypatch):
     assert result["ok"] is False
     assert "allowlist" in result["reason"]
     assert calls == []
+
+
+
+def test_rate_limit_recovery_reports_missing_alternative_model(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
+    healer = make_healer(SimpleNamespace(router=SimpleNamespace(
+        config=SimpleNamespace(tasks=[])
+    )))
+    result = healer._fix_rate_limit("429 rate limit", "")
+    assert result == {
+        "fix": "rate_limit", "ok": False, "reason": "no alternative model"
+    }
+
+
+def test_rate_limit_recovery_uses_configured_task_fallback(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
+    healer = make_healer(SimpleNamespace(router=SimpleNamespace(
+        config=SimpleNamespace(tasks={"chat": "provider/model"})
+    )))
+    result = healer._fix_rate_limit("429 rate limit", "")
+    assert result["ok"] is True
+    assert "next turn" in result["action"]
+
+
+def test_corrupt_database_recovery_keeps_private_backup(tmp_path):
+    db_home = tmp_path / "mimo"
+    db_home.mkdir()
+    db = db_home / "memory.db"
+    db.write_bytes(b"corrupt-database")
+
+    class Mimo:
+        _home = db_home
+
+        def __init__(self):
+            self.reinitialized = False
+
+        def _init_db(self):
+            self.reinitialized = True
+
+    mimo = Mimo()
+    healer = make_healer(SimpleNamespace(mimo=mimo))
+    result = healer._fix_corrupt_db("database is malformed", "")
+
+    assert result["ok"] is True
+    assert Path(result["backup"]).read_bytes() == b"corrupt-database"
+    assert not db.exists()
+    assert mimo.reinitialized is True
+
+
+def test_corrupt_database_recovery_refuses_when_database_is_missing(tmp_path):
+    home = tmp_path / "mimo"
+    home.mkdir()
+    healer = make_healer(SimpleNamespace(mimo=SimpleNamespace(_home=home)))
+    result = healer._fix_corrupt_db("database is malformed", "")
+    assert result["ok"] is False
+    assert "no db found" in result["reason"]
+
+
+def test_backoff_recovery_fixers_are_deterministic_without_sleep(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+    healer = make_healer(SimpleNamespace())
+    api = healer._fix_api_5xx("503 Service Unavailable", "")
+    network = healer._fix_network_unreachable("network is unreachable", "")
+
+    assert api["ok"] is True and api["fix"] == "api_5xx"
+    assert network["ok"] is True and network["fix"] == "network_unreachable"
+    assert sleeps == [1, 2]
