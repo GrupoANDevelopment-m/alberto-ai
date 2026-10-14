@@ -142,50 +142,81 @@ ROUTING_RULES: List[Dict[str, Any]] = [
 
 
 def route_intent(text: str) -> RouteDecision:
-    """Analyze user prompt and return a routing decision.
+    """Route by the strongest matching intent while preserving multi-step needs.
 
-    The decision tells the chat layer:
-    - Which engine to use
-    - Which tool to invoke first
-    - Which skill/squad to load
-    - What kind of work is needed
+    Specificity selects the primary route; flags from all matched rules are
+    merged so compound requests (for example, research + code) do not lose
+    secondary requirements merely because one rule matched first.
     """
     text_lower = text.lower().strip()
-    best: Optional[RouteDecision] = None
+    if not text_lower:
+        return RouteDecision(
+            engine="mimo",
+            confidence=0.0,
+            reasoning="Empty request → ask for clarification before tool execution",
+        )
 
-    for rule in ROUTING_RULES:
-        for pat in rule["patterns"]:
-            if re.search(pat, text_lower):
-                decision = RouteDecision(
-                    engine=rule["engine"],
-                    tool_hint=rule.get("tool_hint"),
-                    skill_hint=rule.get("skill_hint"),
-                    squad_hint=rule.get("squad_hint"),
-                    needs_research=rule.get("needs_research", False),
-                    needs_code=rule.get("needs_code", False),
-                    needs_deploy=rule.get("needs_deploy", False),
-                    needs_security=rule.get("needs_security", False),
-                    confidence=0.9,
-                    reasoning=rule["reasoning"],
-                )
-                if best is None or decision.confidence > best.confidence:
-                    best = decision
-                break
+    matches: List[tuple] = []
+    for rule_index, rule in enumerate(ROUTING_RULES):
+        matched_patterns = [pat for pat in rule["patterns"] if re.search(pat, text_lower)]
+        if not matched_patterns:
+            continue
+        # Regex length after removing common metacharacters approximates how
+        # constrained the trigger is; this is a ranking heuristic, not a
+        # calibrated probability.
+        specificity = max(
+            len(re.sub(r"[\\\\^$.*+?{}()\\[\\]|]", "", pat))
+            for pat in matched_patterns
+        )
+        matches.append((specificity, len(matched_patterns), -rule_index, rule, matched_patterns))
 
-    if best is None:
-        # Default: chat with mimo
-        best = RouteDecision(
+    if not matches:
+        return RouteDecision(
             engine="mimo",
             confidence=0.5,
             reasoning="No specific pattern matched → default chat mode",
         )
 
-    # Adjust based on content
-    if re.search(r"\b(test|tests?|spec)\b", text_lower) and not best.needs_code:
-        best.needs_code = True
-        best.reasoning += " | has 'test' keyword"
+    matches.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    _, _, _, primary, primary_patterns = matches[0]
 
-    return best
+    # Preserve secondary needs from every detected intent. The primary engine
+    # and first tool hint still identify the safest initial step.
+    needs_research = any(item[3].get("needs_research", False) for item in matches)
+    needs_code = any(item[3].get("needs_code", False) for item in matches)
+    needs_deploy = any(item[3].get("needs_deploy", False) for item in matches)
+    needs_security = any(item[3].get("needs_security", False) for item in matches)
+
+    specificity = matches[0][0]
+    runner_up = matches[1][0] if len(matches) > 1 else 0
+    # Keep confidence conservative when multiple similarly specific routes
+    # compete. It is a routing heuristic, not a probability of task success.
+    if len(matches) > 1 and specificity - runner_up < 8:
+        confidence = 0.6
+    elif specificity >= 18:
+        confidence = 0.9
+    else:
+        confidence = 0.7
+
+    reasoning = primary["reasoning"]
+    if len(matches) > 1:
+        labels = [item[3]["reasoning"].split(" → ")[0] for item in matches]
+        reasoning += " | combined intents: " + ", ".join(dict.fromkeys(labels))
+    if needs_code and re.search(r"\\b(test|tests?|spec)\\b", text_lower):
+        reasoning += " | validation/testing requirement detected"
+
+    return RouteDecision(
+        engine=primary["engine"],
+        tool_hint=primary.get("tool_hint"),
+        skill_hint=primary.get("skill_hint"),
+        squad_hint=primary.get("squad_hint"),
+        needs_research=needs_research,
+        needs_code=needs_code,
+        needs_deploy=needs_deploy,
+        needs_security=needs_security,
+        confidence=confidence,
+        reasoning=reasoning,
+    )
 
 
 def build_route_prompt(decision: RouteDecision) -> str:
