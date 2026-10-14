@@ -1440,9 +1440,13 @@ def _mimo_app_create(alberto, args):
         )
     except Exception as exc:
         return {"ok": False, "error": f"MiMo planning failed: {type(exc).__name__}"}
+    required_steps = {"spec", "tdd", "review"}
     if not isinstance(plan, dict) or not plan:
         return {"ok": False, "error": "MiMo did not return a usable application plan"}
-    failed = []
+    # A partial response must never be accepted as a complete security gate.
+    # Require all three named stages, not merely that every returned stage passed.
+    missing_steps = sorted(required_steps - set(plan))
+    failed = list(missing_steps)
     for step, value in plan.items():
         if (not isinstance(value, dict)
                 or not isinstance(value.get("content"), str)
