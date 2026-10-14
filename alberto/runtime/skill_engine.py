@@ -137,8 +137,21 @@ def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) ->
     path = find_skill(name)
     if not path:
         return {"ok": False, "error": f"skill '{name}' not found"}
-    if sandbox is None or not hasattr(sandbox, "run") or not hasattr(sandbox, "home"):
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
         return {"ok": False, "error": "a configured sandbox is required to execute skills"}
+    isolation = getattr(sandbox, "isolation_level", None)
+    docker_isolated = isolation == "docker-container" or getattr(sandbox, "_mode", None) == "docker"
+    allow_host = os.environ.get("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not docker_isolated and not allow_host:
+        return {
+            "ok": False,
+            "error": (
+                "skill execution refused: Docker isolation is required; "
+                "host execution requires explicit ALBERTO_ALLOW_HOST_SKILL_EXECUTION=1"
+            ),
+        }
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     if not blocks:
