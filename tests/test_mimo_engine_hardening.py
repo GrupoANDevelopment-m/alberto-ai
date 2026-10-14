@@ -507,3 +507,78 @@ def test_memory_search_rejects_non_string_query(tmp_path):
                 raise AssertionError(f"invalid memory search query accepted: {query!r}")
     finally:
         engine.stop()
+
+def test_session_list_rehydrates_persisted_sessions_and_checkpoints(tmp_path):
+    engine, _, home = make_engine(tmp_path)
+    session = engine.session_create(goal="audit recovery")
+    checkpoint = engine.checkpoint(session.id, "before restart")
+    assert "error" not in checkpoint
+    engine.stop()
+
+    restarted = MiMoEngine(
+        SimpleNamespace(home=lambda: home), FakeRouter(),
+        mimo_home=home / ".mimo", auto_build=False,
+    )
+    try:
+        sessions = restarted.session_list()
+        assert len(sessions) == 1
+        assert sessions[0]["id"] == session.id
+        assert sessions[0]["goal"] == "audit recovery"
+        assert any(item["note"] == "before restart" for item in sessions[0]["checkpoints"])
+    finally:
+        restarted.stop()
+
+
+def test_snapshot_restore_restores_sessions_and_memory_after_validation(tmp_path):
+    engine, _, home = make_engine(tmp_path)
+    session = engine.session_create(goal="snapshot goal")
+    engine.checkpoint(session.id, "checkpoint included")
+    engine.memory_set("project.key", "snapshot value", tags="audit")
+    snap = engine.snapshot("full-state")
+    assert snap["ok"] is True
+
+    engine.memory_set("project.key", "mutated value", tags="changed")
+    engine.session_create(goal="must be replaced")
+    restored = engine.restore_snapshot("full-state")
+    assert restored == {"ok": True, "restored": len(engine.memory_list()), "sessions_restored": 1}
+    assert engine.memory_get("project.key") == "snapshot value"
+    sessions = engine.session_list()
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == session.id
+    assert any(item["note"] == "checkpoint included" for item in sessions[0]["checkpoints"])
+    engine.stop()
+
+    restarted = MiMoEngine(
+        SimpleNamespace(home=lambda: home), FakeRouter(),
+        mimo_home=home / ".mimo", auto_build=False,
+    )
+    try:
+        assert restarted.memory_get("project.key") == "snapshot value"
+        assert any(item["id"] == session.id for item in restarted.session_list())
+    finally:
+        restarted.stop()
+
+
+def test_restore_snapshot_rejects_corrupt_or_invalid_payload_without_mutation(tmp_path):
+    import json
+
+    engine, _, home = make_engine(tmp_path)
+    try:
+        engine.memory_set("keep", "original")
+        snapshots = home / ".mimo" / "snapshots"
+        (snapshots / "broken.json").write_text("{invalid", encoding="utf-8")
+        result = engine.restore_snapshot("broken")
+        assert result["ok"] is False
+        assert engine.memory_get("keep") == "original"
+
+        (snapshots / "bad-schema.json").write_text(json.dumps({
+            "name": "bad-schema",
+            "entries": [{"key": "new", "value": "would partially restore"}, {"key": "", "value": 7}],
+            "sessions": [],
+        }), encoding="utf-8")
+        result = engine.restore_snapshot("bad-schema")
+        assert result["ok"] is False
+        assert engine.memory_get("keep") == "original"
+        assert engine.memory_get("new") is None
+    finally:
+        engine.stop()
