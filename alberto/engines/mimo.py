@@ -242,11 +242,14 @@ class MiMoEngine:
 
     def memory_delete(self, key: str) -> bool:
         try:
+            # The memory_ad trigger performs the FTS5 external-content delete
+            # using the prior indexed values; direct DELETE against the virtual
+            # table is invalid for this external-content schema.
             self._db.execute("DELETE FROM memory WHERE key=?", (key,))
-            self._db.execute("DELETE FROM memory_fts WHERE key=?", (key,))
             self._db.commit()
             return True
-        except Exception:
+        except sqlite3.Error:
+            self._db.rollback()
             return False
 
     # ===== Goal / Judge =====
