@@ -215,6 +215,13 @@ class MiMoEngine:
         return row[0] if row else None
 
     def memory_search(self, query: str, *, limit: int = 10) -> List[Dict]:
+        # SQLite treats a negative LIMIT as "no limit". Enforce a small,
+        # explicit bound here so every caller (API, tools, and internal code)
+        # shares the same resource limit rather than relying on HTTP validation.
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("memory search limit must be an integer between 1 and 100")
+        if not isinstance(query, str):
+            raise ValueError("memory search query must be a string")
         try:
             cur = self._db.execute(
                 """SELECT m.key, m.value, m.tags, rank
