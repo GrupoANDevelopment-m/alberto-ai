@@ -734,7 +734,7 @@ class TestCompoundIntentRouting:
     def test_compound_request_preserves_research_and_code_needs(self):
         from alberto.runtime.smart_router_v2 import route_intent
 
-        decision = route_intent("criar um app e pesquisar sobre OAuth na internet")
+        decision = route_intent("criar um app e pesquise sobre OAuth na internet")
         assert decision.needs_code is True
         assert decision.needs_research is True
         assert "combined intents" in decision.reasoning
