@@ -729,3 +729,27 @@ class TestConversationModule:
     def test_alberto_system_prompt_callable(self):
         from alberto.conversation import ALBERTO_SYSTEM_PROMPT
         assert callable(ALBERTO_SYSTEM_PROMPT) or isinstance(ALBERTO_SYSTEM_PROMPT, str)
+
+class TestCompoundIntentRouting:
+    def test_compound_request_preserves_research_and_code_needs(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("criar um app e pesquisar sobre OAuth na internet")
+        assert decision.needs_code is True
+        assert decision.needs_research is True
+        assert "combined intents" in decision.reasoning
+
+    def test_compound_security_and_deployment_needs_are_preserved(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("security test e deploy da aplicação")
+        assert decision.needs_security is True
+        assert decision.needs_deploy is True
+
+    def test_empty_request_has_zero_confidence_and_no_tool_hint(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("   ")
+        assert decision.confidence == 0.0
+        assert decision.tool_hint is None
+
