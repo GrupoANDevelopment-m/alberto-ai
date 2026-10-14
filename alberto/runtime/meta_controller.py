@@ -19,6 +19,7 @@ The MetaController orchestrates all of this.
 """
 from __future__ import annotations
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -347,37 +348,38 @@ class MetaController:
         self._emit("subtask_failed", {"id": st.id, "status": st.status, "attempts": st.attempts})
 
     def _try_skill(self, st: SubTask, *, skill_override: Optional[str] = None) -> tuple:
-        """Try to execute a skill. Returns (success, output, error)."""
+        """Execute a skill only through the configured sandbox boundary.
+
+        LocalSandbox and NemoClaw's host fallback execute processes on the host;
+        they are not OS isolation. Refuse untrusted skill code there unless an
+        operator explicitly opts into that development-only risk.
+        """
         skill_name = skill_override or st.skill
         if not skill_name:
             return False, None, "no skill"
-        from alberto.runtime.skill_engine import find_skill, extract_code_blocks
-        path = find_skill(skill_name)
-        if not path:
-            return False, None, f"skill {skill_name} not found"
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        # Find first executable block
-        for b in blocks:
-            if b["lang"] in ("bash", "sh", "shell", "python", "python3", "py"):
-                import subprocess, sys as _sys
-                try:
-                    if b["lang"].startswith("python"):
-                        result = subprocess.run(
-                            [_sys.executable, "-c", b["code"][:2000]],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                    else:
-                        result = subprocess.run(
-                            ["bash", "-c", b["code"][:2000]],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                    return result.returncode == 0, result.stdout, result.stderr
-                except subprocess.TimeoutExpired:
-                    return False, None, "timeout"
-                except Exception as e:
-                    return False, None, str(e)
-        return False, None, "no executable block"
+
+        sandbox = getattr(self.alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "run", None)):
+            return False, None, "skill execution refused: configured sandbox is unavailable"
+
+        isolation = getattr(sandbox, "isolation_level", None)
+        docker_isolated = isolation == "docker-container" or getattr(sandbox, "_mode", None) == "docker"
+        allow_host = os.environ.get("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if not docker_isolated and not allow_host:
+            return (
+                False, None,
+                "skill execution refused: Docker isolation is required; "
+                "host execution requires explicit ALBERTO_ALLOW_HOST_SKILL_EXECUTION=1",
+            )
+
+        from alberto.runtime.skill_engine import run_skill
+        result = run_skill(skill_name, [], sandbox=sandbox, timeout=10)
+        if not result.get("ok"):
+            error = result.get("error") or result.get("stderr") or "skill returned a non-zero exit code"
+            return False, result.get("stdout"), str(error)[:1000]
+        return True, result.get("stdout", ""), ""
 
     def _try_evolve_skill(self, name: str, error: str, obstacle: str):
         """Evolve a skill after failure."""
