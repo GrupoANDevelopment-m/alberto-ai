@@ -202,7 +202,7 @@ def route_intent(text: str) -> RouteDecision:
     if len(matches) > 1:
         labels = [item[3]["reasoning"].split(" → ")[0] for item in matches]
         reasoning += " | combined intents: " + ", ".join(dict.fromkeys(labels))
-    if needs_code and re.search(r"\\b(test|tests?|spec)\\b", text_lower):
+    if needs_code and re.search(r"\b(test|tests?|spec)\b", text_lower):
         reasoning += " | validation/testing requirement detected"
 
     return RouteDecision(
