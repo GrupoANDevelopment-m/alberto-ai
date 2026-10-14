@@ -538,49 +538,61 @@ class MiMoEngine:
 
         if self._db is None:
             return {"ok": False, "error": "memory database is closed"}
-        try:
-            # A single transaction prevents a partially restored memory table.
-            with self._db:
-                self._db.execute("DELETE FROM memory")
-                self._db.executemany(
-                    "INSERT INTO memory (key, value, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    validated_entries,
-                )
-        except sqlite3.Error as exc:
-            return {"ok": False, "error": f"snapshot memory restore failed: {exc}"}
 
-        # Publish restored sessions only after the full payload has passed validation
-        # and the memory transaction has committed.
+        # Build the complete replacement session/checkpoint tree before changing
+        # live state. Publishing the directories and memory rows then happens in
+        # one guarded operation; failures roll back the SQLite transaction and
+        # restore the original directories.
+        live_sessions = self._home / "sessions"
+        live_checkpoints = self._home / "checkpoints"
+        live_sessions.mkdir(parents=True, exist_ok=True)
+        live_checkpoints.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix=".restore-", dir=str(self._home)) as temp_name:
+                temp_root = Path(temp_name)
+                staged_sessions = temp_root / "sessions"
+                staged_checkpoints = temp_root / "checkpoints"
+                backup_sessions = temp_root / "old-sessions"
+                backup_checkpoints = temp_root / "old-checkpoints"
+                staged_sessions.mkdir()
+                staged_checkpoints.mkdir()
+
+                for session in validated_sessions.values():
+                    (staged_sessions / f"{session.id}.json").write_text(json.dumps({
+                        "id": session.id, "started_at": session.started_at, "goal": session.goal,
+                    }, indent=2), encoding="utf-8")
+                    for index, checkpoint in enumerate(session.checkpoints):
+                        (staged_checkpoints / f"{session.id}-restore-{index}.json").write_text(
+                            json.dumps(checkpoint, indent=2), encoding="utf-8"
+                        )
+
+                try:
+                    # SQLite commits only after directory publication succeeds.
+                    with self._db:
+                        self._db.execute("DELETE FROM memory")
+                        self._db.executemany(
+                            "INSERT INTO memory (key, value, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                            validated_entries,
+                        )
+                        os.replace(live_sessions, backup_sessions)
+                        os.replace(staged_sessions, live_sessions)
+                        os.replace(live_checkpoints, backup_checkpoints)
+                        os.replace(staged_checkpoints, live_checkpoints)
+                except Exception:
+                    # Best-effort filesystem rollback pairs with SQLite rollback.
+                    for live, backup in (
+                        (live_sessions, backup_sessions),
+                        (live_checkpoints, backup_checkpoints),
+                    ):
+                        if backup.exists():
+                            if live.exists():
+                                shutil.rmtree(live)
+                            os.replace(backup, live)
+                    raise
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            return {"ok": False, "error": f"snapshot restore failed; prior state retained: {exc}"}
+
         self._sessions = validated_sessions
-        sessions_dir = self._home / "sessions"
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            for session in validated_sessions.values():
-                session_path = sessions_dir / f"{session.id}.json"
-                tmp_path = session_path.with_suffix(".json.tmp")
-                tmp_path.write_text(json.dumps({
-                    "id": session.id, "started_at": session.started_at, "goal": session.goal,
-                }, indent=2), encoding="utf-8")
-                tmp_path.replace(session_path)
-            # Remove sessions not present in the snapshot; otherwise a later
-            # restart would resurrect state that the restore intentionally removed.
-            for existing in sessions_dir.glob("*.json"):
-                if existing.stem not in validated_sessions:
-                    existing.unlink()
-
-            # Replace the persisted checkpoint set rather than appending duplicates.
-            checkpoints_dir = self._home / "checkpoints"
-            checkpoints_dir.mkdir(parents=True, exist_ok=True)
-            for existing in checkpoints_dir.glob("*.json"):
-                existing.unlink()
-            for session in validated_sessions.values():
-                for index, checkpoint in enumerate(session.checkpoints):
-                    cp_path = checkpoints_dir / f"{session.id}-restore-{index}.json"
-                    tmp_path = cp_path.with_suffix(".json.tmp")
-                    tmp_path.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
-                    tmp_path.replace(cp_path)
-        except (OSError, TypeError, ValueError) as exc:
-            return {"ok": False, "error": f"snapshot session persistence failed: {exc}"}
         return {"ok": True, "restored": len(validated_entries), "sessions_restored": len(validated_sessions)}
 
     # ===== Invoke (real) =====
