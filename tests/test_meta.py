@@ -126,6 +126,7 @@ class TestMetaController:
         fake_sandbox = SimpleNamespace(
             isolation_level="docker-container",
             run=lambda *args, **kwargs: None,
+            home=lambda: alberto.sandbox.home(),
         )
         monkeypatch.setattr(alberto, "sandbox", fake_sandbox)
         calls = []
