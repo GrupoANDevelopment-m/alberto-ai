@@ -106,6 +106,44 @@ class TestMetaController:
         assert any("teste 1" in str(h) for h in history)
 
 
+    def test_skill_execution_refuses_host_process_sandbox_by_default(self, alberto, monkeypatch):
+        from alberto.runtime.meta_controller import SubTask
+
+        monkeypatch.delenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", raising=False)
+        mc = MetaController(alberto)
+        success, output, error = mc._try_skill(
+            SubTask(id="security-1", description="untrusted skill", skill="any-skill")
+        )
+        assert success is False
+        assert output is None
+        assert "Docker isolation is required" in error
+
+    def test_skill_execution_delegates_to_docker_sandbox(self, alberto, monkeypatch):
+        from types import SimpleNamespace
+        from alberto.runtime.meta_controller import SubTask
+        import alberto.runtime.skill_engine as skill_engine
+
+        fake_sandbox = SimpleNamespace(
+            isolation_level="docker-container",
+            run=lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(alberto, "sandbox", fake_sandbox)
+        calls = []
+        monkeypatch.setattr(skill_engine, "run_skill", lambda name, args, **kwargs: (
+            calls.append((name, args, kwargs)) or {
+                "ok": True, "stdout": "isolated output", "stderr": ""
+            }
+        ))
+        mc = MetaController(alberto)
+        success, output, error = mc._try_skill(
+            SubTask(id="security-2", description="safe skill", skill="verified-skill")
+        )
+        assert (success, output, error) == (True, "isolated output", "")
+        assert calls[0][0] == "verified-skill"
+        assert calls[0][2]["sandbox"] is fake_sandbox
+        assert calls[0][2]["timeout"] == 10
+
+
 class TestLearner:
     def test_lesson_recorded(self, alberto):
         l = Learner(alberto.sandbox, alberto.mimo)
