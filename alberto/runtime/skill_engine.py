@@ -132,26 +132,28 @@ def show_skill(name: str) -> Dict[str, Any]:
     }
 
 
-def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) -> Dict[str, Any]:
-    """Run the first executable skill block through the configured sandbox."""
-    path = find_skill(name)
-    if not path:
-        return {"ok": False, "error": f"skill '{name}' not found"}
+def _sandbox_policy_error(sandbox) -> Optional[str]:
+    """Return an error unless skill execution has a configured isolated sandbox."""
     if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
-        return {"ok": False, "error": "a configured sandbox is required to execute skills"}
+        return "a configured sandbox is required to execute skills"
     isolation = getattr(sandbox, "isolation_level", None)
     docker_isolated = isolation == "docker-container" or getattr(sandbox, "_mode", None) == "docker"
     allow_host = os.environ.get("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "").strip().lower() in {
         "1", "true", "yes", "on"
     }
     if not docker_isolated and not allow_host:
-        return {
-            "ok": False,
-            "error": (
-                "skill execution refused: Docker isolation is required; "
-                "host execution requires explicit ALBERTO_ALLOW_HOST_SKILL_EXECUTION=1"
-            ),
-        }
+        return (
+            "skill execution refused: Docker isolation is required; "
+            "host execution requires explicit ALBERTO_ALLOW_HOST_SKILL_EXECUTION=1"
+        )
+    return None
+
+
+def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) -> Dict[str, Any]:
+    """Run the first executable skill block through the configured sandbox."""
+    path = find_skill(name)
+    if not path:
+        return {"ok": False, "error": f"skill '{name}' not found"}
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     if not blocks:
@@ -160,6 +162,9 @@ def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) ->
     primary = next((block for block in blocks if block["lang"] in executable_langs), None)
     if primary is None:
         return {"ok": False, "error": f"no executable code block in {name}"}
+    policy_error = _sandbox_policy_error(sandbox)
+    if policy_error:
+        return {"ok": False, "error": policy_error}
     code = substitute_args(primary["code"], args, lang=primary["lang"])
     try:
         if primary["lang"] in ("python", "python3", "py"):
@@ -344,6 +349,12 @@ def main(argv: List[str]) -> int:
         content = path.read_text(encoding="utf-8", errors="replace")
         blocks = extract_code_blocks(content)
         executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
+        executable_blocks = [block for block in blocks if block["lang"] in executable_langs]
+        if executable_blocks:
+            policy_error = _sandbox_policy_error(sandbox)
+            if policy_error:
+                print(f"FAIL: {policy_error}", file=sys.stderr)
+                return 1
         failed = False
         for i, block in enumerate(blocks):
             if block["lang"] not in executable_langs:
