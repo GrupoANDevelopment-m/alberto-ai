@@ -73,3 +73,43 @@ def test_mimo_app_create_is_registered_as_a_real_tool():
     tool = next(item for item in HERMES_TOOL_REGISTRY if item["name"] == "mimo_app_create")
     assert tool["engine"] == "mimo"
     assert tool["fn"] is _mimo_app_create
+
+
+
+def test_mimo_app_create_rejects_missing_required_planning_stage(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return {
+                "spec": {"content": "requirements", "verdict": {"verdict": "pass"}},
+                "review": {"content": "security review", "verdict": {"verdict": "pass"}},
+            }
+
+    alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
+    result = _mimo_app_create(alberto, {"name": "partial-plan", "spec": "A test app"})
+    assert result["ok"] is False
+    assert result["failed_steps"] == ["tdd"]
+    assert not (home / "apps" / "partial-plan").exists()
+
+
+def test_mimo_app_create_rejects_symlinked_output_escape(tmp_path):
+    home = tmp_path / "home"
+    apps = home / "apps"
+    apps.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (apps / "escape-link").symlink_to(outside, target_is_directory=True)
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            raise AssertionError("planner must not run for a symlinked escape")
+
+    alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
+    result = _mimo_app_create(alberto, {
+        "name": "escape", "spec": "app", "output_dir": "escape-link"
+    })
+    assert result["ok"] is False
+    assert "inside the sandbox apps directory" in result["error"]
+    assert list(outside.iterdir()) == []
