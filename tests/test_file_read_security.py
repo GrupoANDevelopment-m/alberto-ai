@@ -86,3 +86,32 @@ def test_file_read_streams_and_caps_very_large_single_line(tmp_path):
     assert is_error is False
     assert len(output) < 100_100
     assert output.endswith("[truncated: file read output limit reached]")
+
+
+
+@pytest.mark.parametrize(
+    ("start_line", "max_lines"),
+    [(-1, 10), (100001, 10), (0, 0), (0, 2001), (True, 10), (0, False), ("bad", 10)],
+)
+def test_mimo_read_rejects_invalid_line_ranges(tmp_path, start_line, max_lines):
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text("one\ntwo\n", encoding="utf-8")
+    output, is_error = tool_read(None, {
+        "path": str(file_path), "start_line": start_line, "max_lines": max_lines
+    })
+    assert is_error is True
+    assert "invalid line range" in output
+
+
+def test_mimo_read_streams_only_requested_window_and_caps_output(tmp_path):
+    file_path = tmp_path / "large.txt"
+    file_path.write_text("first\n" + ("x" * 250_000) + "\nlast\n", encoding="utf-8")
+
+    output, is_error = tool_read(None, {
+        "path": str(file_path), "start_line": 1, "max_lines": 1
+    })
+
+    assert is_error is False
+    assert "2|" in output
+    assert len(output) < 100_200
+    assert output.endswith("[truncated: file read output limit reached]")
