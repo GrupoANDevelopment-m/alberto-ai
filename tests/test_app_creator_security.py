@@ -137,3 +137,82 @@ def test_run_reports_missing_npm_without_claiming_full_success(tmp_path, monkeyp
     assert result["frontend_started"] is False
     assert result["ok"] is False
     assert result["frontend_error"] == "npm not available"
+
+
+
+def test_run_reports_backend_install_exception_and_missing_npm(tmp_path, monkeypatch):
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create("backend-install-error", "test")
+
+    def fake_run(*args, **kwargs):
+        raise TimeoutError("backend dependency installation timed out")
+
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", fake_run)
+    monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda _name: None)
+
+    result = creator.run(Path(created["path"]))
+    assert result["ok"] is False
+    assert result["backend_started"] is False
+    assert "timed out" in result["backend_error"]
+    assert result["frontend_started"] is False
+    assert result["frontend_error"] == "npm not available"
+
+
+def test_run_reports_backend_process_exit_and_frontend_install_failure(tmp_path, monkeypatch):
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create("startup-errors", "test")
+
+    class ExitedProcess:
+        pid = 101
+
+        def poll(self):
+            return 1
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[1:3] == ["-m", "pip"]:
+            return SimpleNamespace(returncode=0, stderr="")
+        return SimpleNamespace(returncode=1, stderr="npm registry unavailable")
+
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", fake_run)
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", lambda *a, **k: ExitedProcess())
+    monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr("alberto.runtime.app_creator.time.sleep", lambda *_: None)
+
+    result = creator.run(Path(created["path"]))
+    assert result["ok"] is False
+    assert result["backend_started"] is False
+    assert result["backend_error"] == "backend process exited during startup"
+    assert result["frontend_started"] is False
+    assert "npm registry unavailable" in result["frontend_error"]
+    assert len(calls) == 2
+
+
+def test_run_keeps_backend_success_when_frontend_install_fails(tmp_path, monkeypatch):
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create("frontend-install-error", "test")
+
+    class RunningProcess:
+        pid = 202
+
+        def poll(self):
+            return None
+
+    def fake_run(args, **kwargs):
+        if args[1:3] == ["-m", "pip"]:
+            return SimpleNamespace(returncode=0, stderr="")
+        return SimpleNamespace(returncode=1, stderr="npm install failed")
+
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", fake_run)
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", lambda *a, **k: RunningProcess())
+    monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr("alberto.runtime.app_creator.time.sleep", lambda *_: None)
+
+    result = creator.run(Path(created["path"]))
+    assert result["backend_started"] is True
+    assert result["backend_pid"] == 202
+    assert result["frontend_started"] is False
+    assert "npm install failed" in result["frontend_error"]
+    assert result["ok"] is False
