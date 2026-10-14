@@ -1423,8 +1423,19 @@ def _mimo_app_create(alberto, args):
     output_dir = args.get("output_dir", ".")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return {"ok": False, "error": "output_dir must be a non-empty path"}
-    # Tool-created projects are confined to the sandbox's apps directory.
-    apps_root = (Path(alberto.sandbox.home()) / "apps").resolve()
+    # Tool-created projects are confined to a real apps directory directly
+    # under the resolved sandbox home. Reject a symlinked apps root instead of
+    # silently treating an external target as part of the sandbox.
+    sandbox_root = Path(alberto.sandbox.home()).resolve()
+    apps_root = sandbox_root / "apps"
+    try:
+        if apps_root.is_symlink():
+            return {"ok": False, "error": "sandbox apps directory must not be a symlink"}
+        apps_root.mkdir(parents=True, exist_ok=True)
+        if apps_root.resolve() != apps_root:
+            return {"ok": False, "error": "sandbox apps directory must not resolve outside the sandbox"}
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot prepare sandbox apps directory: {type(exc).__name__}"}
     requested = Path(output_dir)
     destination = (requested if requested.is_absolute() else apps_root / requested).resolve()
     if destination != apps_root and apps_root not in destination.parents:
