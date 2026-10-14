@@ -105,3 +105,16 @@ def test_memory_delete_endpoint_handles_engine_failure_without_leaking(monkeypat
     assert response.status_code == 500
     assert response.json() == {"detail": "memory deletion failed"}
     assert "private db path" not in response.text
+
+
+def test_memory_search_endpoint_enforces_limit_bounds(monkeypatch, tmp_path):
+    calls = []
+    agent = SimpleNamespace(memory_search=lambda q, limit=10: calls.append((q, limit)) or [])
+    app = make_app(monkeypatch, tmp_path, alberto=agent)
+    client = TestClient(app)
+
+    assert client.get("/api/memory/search?q=hello&limit=0").status_code == 422
+    assert client.get("/api/memory/search?q=hello&limit=101").status_code == 422
+    response = client.get("/api/memory/search?q=hello&limit=20")
+    assert response.status_code == 200
+    assert calls == [("hello", 20)]
