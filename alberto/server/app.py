@@ -223,12 +223,15 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.delete("/api/memory/delete")
     async def memory_delete(key: str):
-        a = app.state.alberto
+        # Use the engine's public API rather than a nonexistent private SQL
+        # helper. This keeps deletion inside MiMo's transaction/FTS5 triggers.
         try:
-            a._sandbox_run_unsafe(f"DELETE FROM memory WHERE key=?", (key,))
-            return {"ok": True}
-        except Exception as e:
-            raise HTTPException(500, str(e))
+            ok = app.state.alberto.memory_delete(key)
+        except Exception:
+            raise HTTPException(500, "memory deletion failed")
+        if not ok:
+            raise HTTPException(500, "memory deletion failed")
+        return {"ok": True, "key": key}
 
     # ===== Squads =====
     @app.get("/api/squad/list")
