@@ -8,7 +8,7 @@ from alberto.runtime import skill_engine
 
 def _skill_file(tmp_path: Path) -> Path:
     skill = tmp_path / "SKILL.md"
-    skill.write_text("```bash\\necho isolated\\n```\\n", encoding="utf-8")
+    skill.write_text("```bash\necho isolated\n```\n", encoding="utf-8")
     return skill
 
 
@@ -38,7 +38,7 @@ def test_run_skill_allows_execution_through_docker_sandbox(tmp_path, monkeypatch
 
     def docker_run(command, **kwargs):
         calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0, stdout="isolated\\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="isolated\n", stderr="")
 
     sandbox = SimpleNamespace(
         isolation_level="docker-container",
@@ -50,7 +50,7 @@ def test_run_skill_allows_execution_through_docker_sandbox(tmp_path, monkeypatch
     result = skill_engine.run_skill("verified-skill", [], sandbox=sandbox, timeout=7)
 
     assert result["ok"] is True
-    assert result["stdout"] == "isolated\\n"
+    assert result["stdout"] == "isolated\n"
     assert calls[0][0] == ["bash", "-c", "echo isolated"]
     assert calls[0][1]["timeout"] == 7
 
@@ -63,7 +63,7 @@ def test_run_skill_host_execution_requires_explicit_development_opt_in(tmp_path,
 
     def host_run(command, **kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="dev-only\\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="dev-only\n", stderr="")
 
     sandbox = SimpleNamespace(
         isolation_level="host-process",
@@ -74,5 +74,5 @@ def test_run_skill_host_execution_requires_explicit_development_opt_in(tmp_path,
     result = skill_engine.run_skill("development-skill", [], sandbox=sandbox)
 
     assert result["ok"] is True
-    assert result["stdout"] == "dev-only\\n"
+    assert result["stdout"] == "dev-only\n"
     assert calls
