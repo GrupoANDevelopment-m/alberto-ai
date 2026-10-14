@@ -582,3 +582,45 @@ def test_restore_snapshot_rejects_corrupt_or_invalid_payload_without_mutation(tm
         assert engine.memory_get("new") is None
     finally:
         engine.stop()
+
+def test_snapshot_restore_rolls_back_memory_and_files_on_publish_failure(tmp_path, monkeypatch):
+    import alberto.engines.mimo as mimo_module
+
+    engine, _, home = make_engine(tmp_path)
+    try:
+        engine.memory_set("keep", "original value")
+        original = engine.session_create(goal="original session")
+        engine.checkpoint(original.id, "original checkpoint")
+        snapshot = engine.snapshot("rollback-case")
+        assert snapshot["ok"] is True
+
+        engine.memory_set("keep", "mutated value")
+        extra = engine.session_create(goal="session to remove")
+        live_sessions = home / ".mimo" / "sessions"
+        live_checkpoints = home / ".mimo" / "checkpoints"
+        original_session_bytes = {
+            path.name: path.read_bytes() for path in live_sessions.glob("*.json")
+        }
+        original_checkpoint_bytes = {
+            path.name: path.read_bytes() for path in live_checkpoints.glob("*.json")
+        }
+        real_replace = mimo_module.os.replace
+
+        def fail_checkpoint_publish(src, dst):
+            src_path, dst_path = Path(src), Path(dst)
+            if (dst_path == live_checkpoints
+                    and src_path.name == "checkpoints"
+                    and src_path.parent.name.startswith(".restore-")):
+                raise OSError("injected checkpoint publish failure")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(mimo_module.os, "replace", fail_checkpoint_publish)
+        result = engine.restore_snapshot("rollback-case")
+        assert result["ok"] is False
+        assert "prior state retained" in result["error"]
+        assert engine.memory_get("keep") == "mutated value"
+        assert {p.name: p.read_bytes() for p in live_sessions.glob("*.json")} == original_session_bytes
+        assert {p.name: p.read_bytes() for p in live_checkpoints.glob("*.json")} == original_checkpoint_bytes
+        assert {item["id"] for item in engine.session_list()} == {original.id, extra.id}
+    finally:
+        engine.stop()
