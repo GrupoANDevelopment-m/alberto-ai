@@ -115,3 +115,14 @@ def test_mimo_read_streams_only_requested_window_and_caps_output(tmp_path):
     assert "2|" in output
     assert len(output) < 100_200
     assert output.endswith("[truncated: file read output limit reached]")
+
+
+
+def test_mimo_read_rejects_files_over_size_limit_before_loading(tmp_path):
+    file_path = tmp_path / "oversized.txt"
+    with file_path.open("wb") as stream:
+        stream.truncate(10 * 1024 * 1024 + 1)
+
+    output, is_error = tool_read(None, {"path": str(file_path)})
+    assert is_error is True
+    assert "10 MiB limit" in output
