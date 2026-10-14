@@ -449,17 +449,27 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("read")
 def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo read.ts equivalent — read file contents with optional line range.
-    Args: path (str), start_line (int, default 0), max_lines (int, default 200)."""
+    """MiMo read.ts equivalent with bounded streaming and optional line range."""
     path = args.get("path", "")
-    start = int(args.get("start_line", 0))
-    max_lines = int(args.get("max_lines", 200))
+    raw_start = args.get("start_line", 0)
+    raw_max_lines = args.get("max_lines", 200)
     if not path:
         return "no path", True
+    if isinstance(raw_start, bool) or isinstance(raw_max_lines, bool):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
+    try:
+        start_line = int(raw_start)
+        max_lines = int(raw_max_lines)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
+    if (str(raw_start).strip() != str(start_line)
+            or str(raw_max_lines).strip() != str(max_lines)
+            or not 0 <= start_line <= 100_000
+            or not 1 <= max_lines <= 2000):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
     try:
         p = Path(path).expanduser()
-        # The MiMo-compatible read tool must enforce the same sensitive-path
-        # policy as file_read, including symlink targets.
+        # Enforce the same sensitive-path policy as file_read, including symlink targets.
         from .nemoclaw_real import is_protected_path
         if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: protected file path", True
@@ -469,10 +479,37 @@ def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
         p = resolved
         if not p.exists():
             return f"file not found: {path}", True
-        lines = p.read_text(errors="replace").splitlines()
-        end = min(start + max_lines, len(lines))
-        out = "\n".join(f"{i+1:4d}| {line}" for i, line in enumerate(lines[start:end], start=start))
-        return f"file: {path} (lines {start+1}-{end} of {len(lines)})\n{out}", False
+
+        selected = []
+        total_chars = 0
+        truncated = False
+        end_line = start_line
+        with p.open("r", errors="replace") as stream:
+            for line_number, line in enumerate(stream):
+                if line_number < start_line:
+                    continue
+                if len(selected) >= max_lines:
+                    break
+                remaining = 100_000 - total_chars
+                if len(line) > remaining:
+                    if remaining > 0:
+                        selected.append(f"{line_number + 1:4d}| {line[:remaining].rstrip(chr(13) + chr(10))}")
+                    truncated = True
+                    end_line = line_number + 1
+                    break
+                selected.append(f"{line_number + 1:4d}| {line.rstrip(chr(13) + chr(10))}")
+                total_chars += len(line)
+                end_line = line_number + 1
+                if total_chars >= 100_000:
+                    truncated = True
+                    break
+        if not selected:
+            return f"file: {path} (no lines in requested range; total not scanned)", False
+        header = f"file: {path} (lines {start_line + 1}-{end_line}; total not scanned)"
+        output = header + "\n" + "\n".join(selected)
+        if truncated:
+            output += "\n[truncated: file read output limit reached]"
+        return output, False
     except Exception as e:
         return f"error: {e}", True
 
