@@ -479,6 +479,10 @@ def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
         p = resolved
         if not p.exists():
             return f"file not found: {path}", True
+        # Python's text iterator materializes a complete line. Refuse unusually
+        # large files here so a single giant line cannot bypass the output cap.
+        if p.stat().st_size > 10 * 1024 * 1024:
+            return "file exceeds the 10 MiB limit for line-ranged reads; use file_read or grep", True
 
         selected = []
         total_chars = 0
