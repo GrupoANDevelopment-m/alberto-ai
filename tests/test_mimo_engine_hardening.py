@@ -96,6 +96,10 @@ def test_memory_upsert_is_searchable_and_does_not_break_updates(tmp_path):
         assert engine.memory_get("project.goal") == "second goal"
         entries = engine.memory_search('"second"')
         assert any(entry["key"] == "project.goal" for entry in entries)
+        # The old indexed terms must disappear after an upsert.
+        assert not any(entry["key"] == "project.goal" for entry in engine.memory_search('"first"'))
+        assert engine.memory_delete("project.goal") is True
+        assert not any(entry["key"] == "project.goal" for entry in engine.memory_search('"second"'))
     finally:
         engine.stop()
 
