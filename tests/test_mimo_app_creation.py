@@ -113,3 +113,40 @@ def test_mimo_app_create_rejects_symlinked_output_escape(tmp_path):
     assert result["ok"] is False
     assert "inside the sandbox apps directory" in result["error"]
     assert list(outside.iterdir()) == []
+
+
+
+def test_mimo_app_create_rejects_symlinked_apps_root(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (home / "apps").symlink_to(external, target_is_directory=True)
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            raise AssertionError("planning must not run when apps root is symlinked")
+
+    alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
+    result = _mimo_app_create(alberto, {"name": "escape", "spec": "an app"})
+    assert result["ok"] is False
+    assert "must not be a symlink" in result["error"]
+    assert not (external / "escape").exists()
+
+
+def test_mimo_app_create_rejects_plan_missing_required_stage(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return {
+                "spec": {"content": "requirements", "verdict": {"verdict": "pass"}},
+                "review": {"content": "reviewed", "verdict": {"verdict": "pass"}},
+            }
+
+    alberto = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
+    result = _mimo_app_create(alberto, {"name": "incomplete-plan", "spec": "an app"})
+    assert result["ok"] is False
+    assert "tdd" in result["failed_steps"]
+    assert not (home / "apps" / "incomplete-plan").exists()
