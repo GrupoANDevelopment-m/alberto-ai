@@ -310,6 +310,15 @@ def test_tool_invoke_judge_without_model(alberto):
     assert "verdict" in out
 
 
+def test_tool_file_rejects_absolute_host_path(alberto):
+    """Absolute paths outside sandbox home must not bypass confinement."""
+    out = invoke_tool(alberto, "file", {
+        "action": "write", "path": "/tmp/alberto-outside-test.txt", "content": "blocked"
+    })
+    assert out["ok"] is False
+    assert "escapes sandbox home" in out["error"]
+
+
 def test_tool_invoke_file_upload(alberto):
     """File write to sandbox."""
     # File operations are confined to the configured sandbox home; use a
