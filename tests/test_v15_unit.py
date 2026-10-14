@@ -753,3 +753,11 @@ class TestCompoundIntentRouting:
         assert decision.confidence == 0.0
         assert decision.tool_hint is None
 
+
+class TestRouterValidationRequirement:
+    def test_code_request_mentions_validation_when_tests_are_requested(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("criar um app e executar testes")
+        assert decision.needs_code is True
+        assert "validation/testing requirement detected" in decision.reasoning
