@@ -123,10 +123,11 @@ class TestMetaController:
         from alberto.runtime.meta_controller import SubTask
         import alberto.runtime.skill_engine as skill_engine
 
+        original_home = alberto.sandbox.home
         fake_sandbox = SimpleNamespace(
             isolation_level="docker-container",
             run=lambda *args, **kwargs: None,
-            home=lambda: alberto.sandbox.home(),
+            home=original_home,
         )
         monkeypatch.setattr(alberto, "sandbox", fake_sandbox)
         calls = []
