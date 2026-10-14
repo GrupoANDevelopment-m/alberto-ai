@@ -117,23 +117,43 @@ def test_run_attempts_both_services_and_reports_pids(tmp_path, monkeypatch):
     assert any(kind == "run" and args[0] == "npm" for kind, args, _ in calls)
 
 
-def test_run_reports_missing_npm_without_claiming_full_success(tmp_path, monkeypatch):
+def test_run_cleans_up_backend_when_npm_is_missing(tmp_path, monkeypatch):
     creator = AppCreator(tmp_path / "apps")
     created = creator.create("no-npm", "test")
 
     class Process:
         pid = 55
 
+        def __init__(self):
+            self.terminated = False
+
         def poll(self):
             return None
 
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            raise AssertionError("kill should not be needed")
+
+    processes = []
+    def fake_popen(*args, **kwargs):
+        proc = Process()
+        processes.append(proc)
+        return proc
+
     monkeypatch.setattr("alberto.runtime.app_creator.shutil.which", lambda _name: None)
     monkeypatch.setattr("alberto.runtime.app_creator.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stderr=""))
-    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", lambda *a, **k: Process())
+    monkeypatch.setattr("alberto.runtime.app_creator.subprocess.Popen", fake_popen)
     monkeypatch.setattr("alberto.runtime.app_creator.time.sleep", lambda *_: None)
 
     result = creator.run(Path(created["path"]))
-    assert result["backend_started"] is True
+    assert result["backend_started"] is False
+    assert "backend_pid" not in result
+    assert processes[0].terminated is True
     assert result["frontend_started"] is False
     assert result["ok"] is False
     assert result["frontend_error"] == "npm not available"
