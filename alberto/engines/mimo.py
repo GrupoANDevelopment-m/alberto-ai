@@ -1,20 +1,15 @@
 """
-MiMo engine — wraps the REAL MiMoCode source from upstream.
+MiMo integration for Alberto AI.
 
-Real MiMo source ships in upstream/mimo/ (TypeScript, 88MB). The MiMo binary
-is built with `bun --compile` (see upstream/mimo/script/build.sh).
+When an upstream MiMo CLI binary is available, code tasks are delegated to its
+`run` command. If it is missing or fails, generation falls back to Alberto's
+configured model router. The adapter also provides local SQLite/FTS5 memory,
+goal evaluation, best-of-N model-router calls, sessions, snapshots and a
+spec/TDD/review planning pipeline.
 
-We don't reimplement MiMo. We:
-  1. Check if a built `mimo` binary exists locally
-  2. If yes, spawn it as a subprocess
-  3. If no, build it from upstream/mimo/src via bun
-  4. Communicate with the binary via JSON-RPC over stdio (real protocol)
-
-Memory: we use FTS5-backed SQLite (real, not in-memory).
-Goals: we use the goal system from MiMo's TypeScript source (we read its
-       goal/judge types and use the same vocabulary).
-Max mode: real best-of-N using parallel sessions (we spawn N mimo processes).
-Compose: real spec → tdd → review pipeline.
+Important boundary: the planning pipeline does not itself materialize arbitrary
+model-generated source files; app creation currently uses a deterministic,
+reviewable scaffold after planning succeeds.
 """
 from __future__ import annotations
 import json
