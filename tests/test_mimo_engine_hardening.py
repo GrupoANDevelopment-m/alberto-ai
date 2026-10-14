@@ -478,3 +478,32 @@ def test_binary_start_exception_disables_binary(tmp_path, monkeypatch):
         assert engine.binary is None
     finally:
         engine.stop()
+
+
+def test_memory_search_rejects_unbounded_or_invalid_limits(tmp_path):
+    engine, _, _ = make_engine(tmp_path)
+    try:
+        engine.memory_set("resource.test", "bounded memory search")
+        for limit in (0, -1, 101, True, 1.5, "10", None):
+            try:
+                engine.memory_search("bounded", limit=limit)
+            except ValueError as exc:
+                assert "limit" in str(exc).lower()
+            else:
+                raise AssertionError(f"invalid memory search limit accepted: {limit!r}")
+    finally:
+        engine.stop()
+
+
+def test_memory_search_rejects_non_string_query(tmp_path):
+    engine, _, _ = make_engine(tmp_path)
+    try:
+        for query in (None, 123, ["term"]):
+            try:
+                engine.memory_search(query)
+            except ValueError as exc:
+                assert "query" in str(exc).lower()
+            else:
+                raise AssertionError(f"invalid memory search query accepted: {query!r}")
+    finally:
+        engine.stop()
