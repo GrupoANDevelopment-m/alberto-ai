@@ -158,11 +158,19 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("file_read")
 def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
-    """Read a file. Args: path (str), max_lines (int, default 200)."""
+    """Read a bounded prefix of a file. Args: path (str), max_lines (int, default 200)."""
     path = args.get("path", "")
-    max_lines = int(args.get("max_lines", 200))
+    raw_max_lines = args.get("max_lines", 200)
     if not path:
         return "no path provided", True
+    if isinstance(raw_max_lines, bool):
+        return "invalid max_lines: expected an integer from 1 to 2000", True
+    try:
+        max_lines = int(raw_max_lines)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid max_lines: expected an integer from 1 to 2000", True
+    if str(raw_max_lines).strip() != str(max_lines) or not 1 <= max_lines <= 2000:
+        return "invalid max_lines: expected an integer from 1 to 2000", True
     try:
         p = Path(path).expanduser()
         # Apply the same sensitive-path policy to reads as to writes. Check both
@@ -176,9 +184,34 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
         p = resolved
         if not p.exists():
             return f"file not found: {path}", True
-        content = p.read_text(errors="replace")
-        lines = content.splitlines()[:max_lines]
-        return "\n".join(lines), False
+        # Stream only the requested prefix instead of loading an arbitrarily
+        # large file into memory. Cap output for files containing huge lines.
+        output = []
+        total_chars = 0
+        truncated = False
+        with p.open("r", errors="replace") as stream:
+            for _ in range(max_lines):
+                line = stream.readline(100_001)
+                if not line:
+                    break
+                remaining = 100_000 - total_chars
+                if len(line) > remaining:
+                    if remaining > 0:
+                        output.append(line[:remaining].rstrip("\\r\\n"))
+                    truncated = True
+                    break
+                output.append(line.rstrip("\\r\\n"))
+                total_chars += len(line)
+                if total_chars >= 100_000:
+                    truncated = True
+                    break
+                if len(line) == 100_001:
+                    truncated = True
+                    break
+        result = "\\n".join(output)
+        if truncated:
+            result += "\\n[truncated: file read output limit reached]"
+        return result, False
     except Exception as e:
         return f"error: {e}", True
 
