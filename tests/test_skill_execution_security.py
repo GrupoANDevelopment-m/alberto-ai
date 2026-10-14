@@ -23,6 +23,7 @@ def code_block(language, code):
 
 
 def test_shell_skill_argument_cannot_inject_commands(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
     marker = tmp_path / "owned"
     payload = f'"; touch {marker}; echo "'
     skill_path = write_skill(
@@ -41,6 +42,7 @@ def test_shell_skill_argument_cannot_inject_commands(tmp_path, monkeypatch):
 
 
 def test_python_skill_argument_is_a_string_literal(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
     marker = tmp_path / "python-owned"
     payload = f'"); __import__("os").system("touch {marker}"); print("'
     skill_path = write_skill(
@@ -127,6 +129,7 @@ def test_tool_skill_show_uses_content_helper(monkeypatch):
 
 
 def test_python_args_placeholder_expands_multiple_literals(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
     skill_path = write_skill(
         tmp_path,
         "python-multiple-args",
@@ -154,6 +157,9 @@ def test_skill_cli_run_all_uses_configured_sandbox_and_returns_failure(tmp_path,
     monkeypatch.setenv("ALBERTO_SANDBOX_KIND", "nemoclaw")
 
     class FakeSandbox:
+        isolation_level = "docker-container"
+        _mode = "docker"
+
         def __init__(self):
             self.calls = []
 
@@ -176,3 +182,34 @@ def test_skill_cli_run_all_uses_configured_sandbox_and_returns_failure(tmp_path,
     assert result == 1
     assert kinds == ["nemoclaw"]
     assert fake.calls == [(["bash", "-c", "exit 7"], 60, str(tmp_path))]
+
+
+def test_skill_cli_run_all_refuses_host_execution_without_opt_in(tmp_path, monkeypatch, capsys):
+    skill_path = write_skill(
+        tmp_path,
+        "host-run-all-refused",
+        code_block("bash", "echo must-not-run"),
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path)
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", raising=False)
+    monkeypatch.setenv("ALBERTO_SANDBOX_KIND", "local")
+
+    class FakeHostSandbox:
+        def __init__(self):
+            self.calls = []
+
+        def home(self):
+            return tmp_path
+
+        def run(self, command, *, timeout=60, cwd=None):
+            self.calls.append(command)
+            raise AssertionError("host command must not execute")
+
+    fake = FakeHostSandbox()
+    monkeypatch.setattr("alberto.sandbox.base.make_sandbox", lambda kind: fake)
+
+    result = skill_engine.main(["run-all", "host-run-all-refused"])
+
+    assert result == 1
+    assert fake.calls == []
+    assert "Docker isolation is required" in capsys.readouterr().err
