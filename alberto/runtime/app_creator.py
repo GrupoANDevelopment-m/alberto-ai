@@ -272,6 +272,8 @@ docker compose up
     def run(self, app_dir: Path) -> Dict[str, Any]:
         """Install dependencies and attempt to start both local development servers."""
         result = {"frontend_started": False, "backend_started": False}
+        backend_proc = None
+        frontend_proc = None
         # Backend
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
@@ -280,7 +282,8 @@ docker compose up
             backend_proc = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=app_dir / "backend",
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                # Avoid undrained pipes blocking long-running server processes.
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             time.sleep(3)
             if backend_proc.poll() is None:
@@ -308,7 +311,7 @@ docker compose up
                     frontend_proc = subprocess.Popen(
                         ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"],
                         cwd=app_dir / "frontend",
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     )
                     time.sleep(2)
                     if frontend_proc.poll() is None:
@@ -318,6 +321,25 @@ docker compose up
                         result["frontend_error"] = "frontend process exited during startup"
         except Exception as e:
             result["frontend_error"] = str(e)
+        # A partial application is not a successful launch. Tear down whichever
+        # service did start so failed frontend startup cannot leak a backend (or
+        # vice versa) listening in the background.
+        if not (result["backend_started"] and result["frontend_started"]):
+            for label, process in (("backend", backend_proc), ("frontend", frontend_proc)):
+                if process is None or not result.get(f"{label}_started"):
+                    continue
+                try:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                    result[f"{label}_cleanup"] = "terminated because the full app did not start"
+                except Exception as exc:
+                    result[f"{label}_cleanup_error"] = type(exc).__name__
+                result[f"{label}_started"] = False
+                result.pop(f"{label}_pid", None)
         result["ok"] = result["backend_started"] and result["frontend_started"]
         return result
 
