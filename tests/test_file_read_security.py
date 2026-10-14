@@ -63,3 +63,26 @@ def test_grep_skips_symlink_to_protected_file(tmp_path):
     assert is_error is False
     assert "no matches" in output
     assert "root:x:0:0" not in output
+
+
+
+@pytest.mark.parametrize("max_lines", [0, -1, 2001, True, 1.5, "nope"])
+def test_file_read_rejects_invalid_line_limits(tmp_path, max_lines):
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text("one\\ntwo\\n", encoding="utf-8")
+    output, is_error = tool_file_read(None, {
+        "path": str(file_path), "max_lines": max_lines
+    })
+    assert is_error is True
+    assert "invalid max_lines" in output
+
+
+def test_file_read_streams_and_caps_very_large_single_line(tmp_path):
+    file_path = tmp_path / "large.txt"
+    file_path.write_text("x" * 250_000, encoding="utf-8")
+
+    output, is_error = tool_file_read(None, {"path": str(file_path), "max_lines": 1})
+
+    assert is_error is False
+    assert len(output) < 100_100
+    assert output.endswith("[truncated: file read output limit reached]")
