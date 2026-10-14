@@ -28,7 +28,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -213,7 +213,7 @@ def create_app(alberto: Optional[Alberto] = None,
         return {"key": key, "value": v}
 
     @app.get("/api/memory/search")
-    async def memory_search(q: str, limit: int = 10):
+    async def memory_search(q: str, limit: int = Query(default=10, ge=1, le=100)):
         return app.state.alberto.memory_search(q, limit=limit)
 
     @app.post("/api/memory/set")
