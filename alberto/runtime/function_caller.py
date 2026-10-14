@@ -197,10 +197,10 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
                 remaining = 100_000 - total_chars
                 if len(line) > remaining:
                     if remaining > 0:
-                        output.append(line[:remaining].rstrip("\\r\\n"))
+                        output.append(line[:remaining].rstrip("\r\n"))
                     truncated = True
                     break
-                output.append(line.rstrip("\\r\\n"))
+                output.append(line.rstrip("\r\n"))
                 total_chars += len(line)
                 if total_chars >= 100_000:
                     truncated = True
@@ -208,9 +208,9 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
                 if len(line) == 100_001:
                     truncated = True
                     break
-        result = "\\n".join(output)
+        result = "\n".join(output)
         if truncated:
-            result += "\\n[truncated: file read output limit reached]"
+            result += "\n[truncated: file read output limit reached]"
         return result, False
     except Exception as e:
         return f"error: {e}", True
