@@ -78,3 +78,30 @@ def test_production_error_response_and_logs_do_not_disclose_exception(monkeypatc
     assert response.json() == {"error": "internal server error"}
     assert "secret-path" not in response.text
     assert "secret-path" not in caplog.text
+
+
+def test_memory_delete_endpoint_uses_public_engine_api(monkeypatch, tmp_path):
+    deleted = []
+    agent = SimpleNamespace(memory_delete=lambda key: deleted.append(key) or True)
+    app = make_app(monkeypatch, tmp_path, alberto=agent)
+
+    response = TestClient(app).delete("/api/memory/delete?key=project.goal")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "key": "project.goal"}
+    assert deleted == ["project.goal"]
+
+
+def test_memory_delete_endpoint_handles_engine_failure_without_leaking(monkeypatch, tmp_path):
+    agent = SimpleNamespace(
+        memory_delete=lambda _key: (_ for _ in ()).throw(RuntimeError("private db path"))
+    )
+    app = make_app(monkeypatch, tmp_path, alberto=agent)
+
+    response = TestClient(app, raise_server_exceptions=False).delete(
+        "/api/memory/delete?key=project.goal"
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "memory deletion failed"}
+    assert "private db path" not in response.text
