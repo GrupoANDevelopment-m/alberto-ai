@@ -138,6 +138,28 @@ class MiMoEngine:
                 key, value, tags, content='memory', content_rowid='id'
             )
         """)
+        # Keep the external-content FTS index synchronized transactionally.
+        # FTS5 external-content tables require the special 'delete' command
+        # with the old indexed values; a plain DELETE can corrupt the index.
+        self._db.executescript("""
+            CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+                INSERT INTO memory_fts(rowid, key, value, tags)
+                VALUES (new.id, new.key, new.value, coalesce(new.tags, ''));
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value, tags)
+                VALUES ('delete', old.id, old.key, old.value, coalesce(old.tags, ''));
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value, tags)
+                VALUES ('delete', old.id, old.key, old.value, coalesce(old.tags, ''));
+                INSERT INTO memory_fts(rowid, key, value, tags)
+                VALUES (new.id, new.key, new.value, coalesce(new.tags, ''));
+            END;
+        """)
+        # Rebuild once on initialization so databases created before these
+        # triggers existed recover a stale or incomplete index safely.
+        self._db.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
         self._db.commit()
 
     # ===== Lifecycle =====
@@ -189,16 +211,7 @@ class MiMoEngine:
                                                 updated_at=excluded.updated_at""",
             (key, value, tags, now, now),
         )
-        # Keep the FTS index synchronized on both insert and upsert. Without
-        # deleting the previous row, updates can leave stale indexed content.
-        self._db.execute(
-            "DELETE FROM memory_fts WHERE rowid=(SELECT id FROM memory WHERE key=?)",
-            (key,),
-        )
-        self._db.execute(
-            "INSERT INTO memory_fts(rowid, key, value, tags) VALUES ((SELECT id FROM memory WHERE key=?), ?, ?, ?)",
-            (key, key, value, tags or ""),
-        )
+        # FTS5 triggers above maintain the external-content index atomically.
         self._db.commit()
 
     def memory_get(self, key: str) -> Optional[str]:
