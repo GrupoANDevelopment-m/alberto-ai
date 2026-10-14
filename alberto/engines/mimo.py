@@ -562,9 +562,17 @@ class MiMoEngine:
                     "id": session.id, "started_at": session.started_at, "goal": session.goal,
                 }, indent=2), encoding="utf-8")
                 tmp_path.replace(session_path)
-            # Persist checkpoint data so it survives a process restart.
+            # Remove sessions not present in the snapshot; otherwise a later
+            # restart would resurrect state that the restore intentionally removed.
+            for existing in sessions_dir.glob("*.json"):
+                if existing.stem not in validated_sessions:
+                    existing.unlink()
+
+            # Replace the persisted checkpoint set rather than appending duplicates.
             checkpoints_dir = self._home / "checkpoints"
             checkpoints_dir.mkdir(parents=True, exist_ok=True)
+            for existing in checkpoints_dir.glob("*.json"):
+                existing.unlink()
             for session in validated_sessions.values():
                 for index, checkpoint in enumerate(session.checkpoints):
                     cp_path = checkpoints_dir / f"{session.id}-restore-{index}.json"
