@@ -68,8 +68,40 @@ class MiMoEngine:
         self._db: Optional[sqlite3.Connection] = None
         self._sessions: Dict[str, MiMoSession] = {}
         self._init_db()
+        self._load_sessions()
         if auto_build and not self._binary:
             self._try_build_binary()
+
+    def _load_sessions(self) -> None:
+        """Rehydrate valid persisted sessions and their checkpoints on startup."""
+        sessions_dir = self._home / "sessions"
+        checkpoints_dir = self._home / "checkpoints"
+        for path in sorted(sessions_dir.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                sid = raw.get("id")
+                started_at = raw.get("started_at")
+                goal = raw.get("goal")
+                if (not isinstance(sid, str)
+                        or not re.fullmatch(r"mimo-[A-Za-z0-9_-]{1,100}", sid)
+                        or path.stem != sid
+                        or not isinstance(started_at, (int, float))
+                        or isinstance(started_at, bool)
+                        or not math.isfinite(float(started_at))
+                        or (goal is not None and not isinstance(goal, str))):
+                    continue
+                session = MiMoSession(id=sid, started_at=float(started_at), goal=goal)
+                for checkpoint_path in sorted(checkpoints_dir.glob(f"{sid}-*.json")):
+                    try:
+                        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                        if isinstance(checkpoint, dict):
+                            session.checkpoints.append(checkpoint)
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        continue
+                self._sessions[sid] = session
+            except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+                # A malformed session must not prevent the engine from starting.
+                continue
 
     def _find_binary(self) -> Optional[str]:
         for path in [
@@ -415,8 +447,11 @@ class MiMoEngine:
         return s
 
     def session_list(self) -> List[Dict]:
-        return [{"id": s.id, "started_at": s.started_at, "goal": s.goal}
-                for s in self._sessions.values()]
+        return [
+            {"id": s.id, "started_at": s.started_at, "goal": s.goal,
+             "checkpoints": list(s.checkpoints), "metadata": dict(s.metadata)}
+            for s in sorted(self._sessions.values(), key=lambda item: item.started_at)
+        ]
 
     def checkpoint(self, session_id: str, note: str = "") -> Dict:
         s = self._sessions.get(session_id)
@@ -452,12 +487,93 @@ class MiMoEngine:
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
             return {"ok": False, "error": "snapshot name must be a 1-64 character slug"}
         path = self._home / "snapshots" / f"{name}.json"
-        if not path.exists():
-            return {"error": f"snapshot {name!r} not found"}
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for entry in data.get("entries", []):
-            self.memory_set(entry["key"], entry["value"], tags=entry.get("tags"))
-        return {"ok": True, "restored": len(data.get("entries", []))}
+        if not path.is_file():
+            return {"ok": False, "error": f"snapshot {name!r} not found"}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"snapshot cannot be read: {exc}"}
+        if not isinstance(data, dict) or data.get("name") != name:
+            return {"ok": False, "error": "snapshot has an invalid root schema"}
+        entries = data.get("entries")
+        raw_sessions = data.get("sessions", [])
+        if not isinstance(entries, list) or not isinstance(raw_sessions, list):
+            return {"ok": False, "error": "snapshot entries and sessions must be lists"}
+
+        # Validate the complete payload before touching live state.
+        validated_entries = []
+        seen_keys = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return {"ok": False, "error": "snapshot contains an invalid memory entry"}
+            key, value, tags = entry.get("key"), entry.get("value"), entry.get("tags")
+            if (not isinstance(key, str) or not key or not isinstance(value, str)
+                    or (tags is not None and not isinstance(tags, str)) or key in seen_keys):
+                return {"ok": False, "error": "snapshot contains invalid or duplicate memory fields"}
+            seen_keys.add(key)
+            updated_at = entry.get("updated_at", time.time())
+            if (not isinstance(updated_at, (int, float)) or isinstance(updated_at, bool)
+                    or not math.isfinite(float(updated_at))):
+                return {"ok": False, "error": "snapshot contains an invalid memory timestamp"}
+            validated_entries.append((key, value, tags, float(updated_at), float(updated_at)))
+
+        validated_sessions: Dict[str, MiMoSession] = {}
+        for raw in raw_sessions:
+            if not isinstance(raw, dict):
+                return {"ok": False, "error": "snapshot contains an invalid session"}
+            sid, started_at = raw.get("id"), raw.get("started_at")
+            goal, checkpoints, metadata = raw.get("goal"), raw.get("checkpoints", []), raw.get("metadata", {})
+            if (not isinstance(sid, str)
+                    or not re.fullmatch(r"mimo-[A-Za-z0-9_-]{1,100}", sid)
+                    or not isinstance(started_at, (int, float)) or isinstance(started_at, bool)
+                    or not math.isfinite(float(started_at))
+                    or (goal is not None and not isinstance(goal, str))
+                    or not isinstance(checkpoints, list) or not all(isinstance(cp, dict) for cp in checkpoints)
+                    or not isinstance(metadata, dict) or sid in validated_sessions):
+                return {"ok": False, "error": "snapshot contains invalid or duplicate session fields"}
+            validated_sessions[sid] = MiMoSession(
+                id=sid, started_at=float(started_at), goal=goal,
+                checkpoints=list(checkpoints), metadata=dict(metadata),
+            )
+
+        if self._db is None:
+            return {"ok": False, "error": "memory database is closed"}
+        try:
+            # A single transaction prevents a partially restored memory table.
+            with self._db:
+                self._db.execute("DELETE FROM memory")
+                self._db.executemany(
+                    "INSERT INTO memory (key, value, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    validated_entries,
+                )
+        except sqlite3.Error as exc:
+            return {"ok": False, "error": f"snapshot memory restore failed: {exc}"}
+
+        # Publish restored sessions only after the full payload has passed validation
+        # and the memory transaction has committed.
+        self._sessions = validated_sessions
+        sessions_dir = self._home / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            for session in validated_sessions.values():
+                session_path = sessions_dir / f"{session.id}.json"
+                tmp_path = session_path.with_suffix(".json.tmp")
+                tmp_path.write_text(json.dumps({
+                    "id": session.id, "started_at": session.started_at, "goal": session.goal,
+                }, indent=2), encoding="utf-8")
+                tmp_path.replace(session_path)
+            # Persist checkpoint data so it survives a process restart.
+            checkpoints_dir = self._home / "checkpoints"
+            checkpoints_dir.mkdir(parents=True, exist_ok=True)
+            for session in validated_sessions.values():
+                for index, checkpoint in enumerate(session.checkpoints):
+                    cp_path = checkpoints_dir / f"{session.id}-restore-{index}.json"
+                    tmp_path = cp_path.with_suffix(".json.tmp")
+                    tmp_path.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+                    tmp_path.replace(cp_path)
+        except (OSError, TypeError, ValueError) as exc:
+            return {"ok": False, "error": f"snapshot session persistence failed: {exc}"}
+        return {"ok": True, "restored": len(validated_entries), "sessions_restored": len(validated_sessions)}
 
     # ===== Invoke (real) =====
     def invoke(self, prompt: str, **kwargs) -> str:
