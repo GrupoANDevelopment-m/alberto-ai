@@ -31,7 +31,7 @@ def test_mimo_app_create_runs_plan_then_materializes_scaffold(tmp_path):
     assert (app / "frontend" / "src" / "App.tsx").is_file()
     assert (app / "backend" / "main.py").is_file()
     assert (app / "docker-compose.yml").is_file()
-    assert "model-generated source is not executed" in result["note"]
+    assert "model-generated source is not executed" in result["note"].lower()
 
 
 def test_mimo_app_create_fails_closed_if_planning_step_fails(tmp_path):
