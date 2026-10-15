@@ -33,6 +33,7 @@ class SubTask:
     id: str
     description: str
     skill: Optional[str] = None  # chosen skill
+    depends_on: List[str] = field(default_factory=list)
     status: str = "pending"  # pending | running | done | failed | blocked
     output: Any = None
     error: Optional[str] = None
@@ -250,6 +251,9 @@ class MetaController:
                 id=f"st-{i+1}",
                 description=st,
                 skill=skill_name,
+                # Phrase decomposition preserves order. Later tasks depend on
+                # the previous task until a richer planner identifies branches.
+                depends_on=[f"st-{i}"] if i > 0 else [],
             ))
         plan.status = "executing"
         self.plans[objective] = plan
@@ -293,10 +297,21 @@ class MetaController:
     def execute(self, plan: Plan) -> Plan:
         """Run the plan. Returns updated plan."""
         self._emit("execute_start", {"objective": plan.objective})
+        completed = {st.id: st.status for st in plan.subtasks}
         for st in plan.subtasks:
-            if st.status in ("done",):
+            if st.status == "done":
+                completed[st.id] = "done"
+                continue
+            unmet = [dep for dep in st.depends_on if completed.get(dep) != "done"]
+            if unmet:
+                st.status = "blocked"
+                st.error = "dependency not completed: " + ", ".join(unmet)
+                st.finished_at = time.time()
+                completed[st.id] = "blocked"
+                self._emit("subtask_blocked", {"id": st.id, "reason": st.error})
                 continue
             self._execute_subtask(plan, st)
+            completed[st.id] = st.status
         # Re-evaluate
         plan.status = "done" if all(s.status == "done" for s in plan.subtasks) else "failed"
         plan.iterations += 1
@@ -352,6 +367,11 @@ class MetaController:
                 if success2:
                     st.status = "done"
                     st.output = output2
+                    st.error = None
+                    st.finished_at = time.time()
+                    self.skill_manager.record_outcome(
+                        st.skill, success=True, duration=time.time() - (st.started_at or st.finished_at)
+                    )
                     self._emit("subtask_recovered", {"id": st.id})
                     return
             # 4. Create new skill if obstacle is novel
