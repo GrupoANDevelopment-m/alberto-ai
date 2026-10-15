@@ -76,6 +76,8 @@ def test_perf_reports_request_failures_as_failed_benchmark(tmp_path, monkeypatch
         def kill(self):
             pass
 
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
     monkeypatch.setattr("alberto.runtime.tester.subprocess.Popen", lambda *a, **k: Process())
     monkeypatch.setattr("alberto.runtime.tester.time.sleep", lambda *_: None)
 
@@ -133,3 +135,53 @@ def test_perf_reports_successful_requests_and_percentiles(tmp_path, monkeypatch)
     assert result["concurrent"]["throughput_rps"] == pytest.approx(
         result["concurrent"]["n"] / result["concurrent"]["duration_s"]
     )
+
+
+
+def test_perf_refuses_host_execution_without_explicit_opt_in(tmp_path, monkeypatch):
+    t = make_tester(tmp_path)
+    (t.app_dir / "backend").mkdir()
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_APP_TESTING", raising=False)
+    monkeypatch.setattr(
+        "alberto.runtime.tester.subprocess.Popen",
+        lambda *a, **k: pytest.fail("must refuse before starting app code"),
+    )
+    result = t.perf("/", n_requests=1, concurrency=1)
+    assert result["ok"] is False
+    assert "refusing to execute app code on the host" in result["error"]
+
+
+@pytest.mark.parametrize("method,phase", [
+    ("test_install", "test_install"),
+    ("test_frontend_e2e", "frontend_e2e"),
+])
+def test_install_and_e2e_refuse_host_execution_without_opt_in(tmp_path, monkeypatch, method, phase):
+    t = make_tester(tmp_path)
+    (t.app_dir / "backend").mkdir()
+    (t.app_dir / "frontend").mkdir()
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_APP_TESTING", raising=False)
+    monkeypatch.setattr(
+        "alberto.runtime.tester.subprocess.run",
+        lambda *a, **k: pytest.fail("must refuse before subprocess.run"),
+    )
+    monkeypatch.setattr(
+        "alberto.runtime.tester.subprocess.Popen",
+        lambda *a, **k: pytest.fail("must refuse before subprocess.Popen"),
+    )
+    result = getattr(t, method)()
+    assert result["ok"] is False
+    assert result["phase"] == phase
+    assert "refusing to execute app code on the host" in result["error"]
+
+
+def test_backend_smoke_refuses_host_execution_without_opt_in(tmp_path, monkeypatch):
+    t = make_tester(tmp_path)
+    t.backend.mkdir()
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_APP_TESTING", raising=False)
+    monkeypatch.setattr(
+        "alberto.runtime.tester.subprocess.Popen",
+        lambda *a, **k: pytest.fail("must refuse before starting app code"),
+    )
+    result = t._test_backend()
+    assert result["ok"] is False
+    assert result["phase"] == "backend_smoke"
