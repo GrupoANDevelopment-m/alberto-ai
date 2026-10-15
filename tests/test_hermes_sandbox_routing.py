@@ -293,3 +293,70 @@ def test_tts_rejects_symlinked_output_parent_escaping_sandbox(tmp_path, monkeypa
     assert result["ok"] is False
     assert "escapes sandbox home" in result["error"]
     assert not (outside / "escape.mp3").exists()
+
+
+def test_mimo_worktree_relative_destination_uses_requested_cwd(tmp_path):
+    from alberto.engines.hermes_tools import _mimo_worktree
+
+    home = tmp_path / "sandbox"
+    repo = home / "repo"
+    nested = repo / "src"
+    (nested / ".keep").parent.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    sandbox = RecordingSandbox(home)
+
+    result = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": "worktrees/session", "cwd": "repo/src", "branch": "session"},
+    )
+
+    assert result["ok"] is True
+    # Relative destinations must retain Git's cwd-relative meaning.
+    assert sandbox.calls[-1][0][-1] == "src/worktrees/session"
+    assert sandbox.calls[-2][0] == ["mkdir", "-p", "src/worktrees"]
+    assert result["path"] == str(nested / "worktrees" / "session")
+
+
+def test_tts_refuses_docker_only_home_until_provider_runs_in_sandbox(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    class DockerOnlySandbox(RecordingSandbox):
+        isolation_level = "docker-container"
+
+        def home(self):
+            return Path("/tmp")
+
+    monkeypatch.setattr(
+        hermes_tools, "_try_import",
+        lambda _name: (_ for _ in ()).throw(AssertionError("provider must not run against a container-only path")),
+    )
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=DockerOnlySandbox(tmp_path)),
+        {"text": "hello", "output_path": "audio/test.mp3"},
+    )
+
+    assert result["ok"] is False
+    assert "Docker mode is unsupported" in result["error"]
+
+
+def test_tts_rejects_output_symlink_even_when_target_is_inside_sandbox(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    home = tmp_path / "sandbox"
+    home.mkdir()
+    real_file = home / "real.mp3"
+    real_file.write_bytes(b"existing")
+    (home / "alias.mp3").symlink_to(real_file)
+    monkeypatch.setattr(
+        hermes_tools, "_try_import",
+        lambda _name: (_ for _ in ()).throw(AssertionError("provider must not run for symlink output")),
+    )
+
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=RecordingSandbox(home)),
+        {"text": "hello", "output_path": "alias.mp3"},
+    )
+
+    assert result["ok"] is False
+    assert "symbolic link" in result["error"]
+    assert real_file.read_bytes() == b"existing"
