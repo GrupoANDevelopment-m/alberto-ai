@@ -131,6 +131,10 @@ def test_load_config_skips_malformed_entries_and_keeps_valid_servers(tmp_path, c
             "transport": "stdio", "command": sys.executable,
             "args": ["-c", 3],
         },
+        "bad-transport-type": {
+            "transport": ["stdio"], "command": sys.executable,
+            "args": [], "env": {},
+        },
         "good": {
             "transport": "stdio", "command": sys.executable,
             "args": ["-c", "print('ok')"], "env": {},
@@ -140,6 +144,7 @@ def test_load_config_skips_malformed_entries_and_keeps_valid_servers(tmp_path, c
     assert "good" in client.servers
     assert "bad-null" not in client.servers
     assert "bad-args" not in client.servers
+    assert "bad-transport-type" not in client.servers
     assert "ignoring invalid server config" in capsys.readouterr().err
 
 
