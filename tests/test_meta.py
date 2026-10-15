@@ -225,24 +225,23 @@ class TestAutonomyLoop:
 
 
 class TestIntegration:
-    def test_full_cycle_plan_to_recovery(self, alberto):
-        """End-to-end: plan → execute → detect obstacle → research → evolve → record."""
+    def test_full_cycle_respects_default_skill_execution_policy(self, alberto):
+        """End-to-end: planning must not bypass the default skill-execution boundary."""
         mc = MetaController(alberto)
         events_seen = []
-        def on_event(e, d):
-            events_seen.append(e)
-        mc.on_event(on_event)
-        # Force a failure scenario
+        mc.on_event(lambda event, data: events_seen.append((event, data)))
+
         plan = mc.plan_objective("testar browser com browser-use")
-        plan = mc.execute(plan)
-        # Verify cycle
-        assert "execute_start" in events_seen
-        assert "obstacle_detected" in events_seen
-        # Verify persistence
-        assert alberto.learner.lessons_path.exists()
-        # Verify skill was evolved
-        history = mc.get_history(limit=1)
-        assert history, "history should be recorded"
+        result = mc.execute(plan)
+
+        # Host-process skill execution is disabled by default. A policy denial
+        # must block the task rather than trigger research/evolution recovery.
+        assert any(event == "execute_start" for event, _ in events_seen)
+        assert any(event == "subtask_blocked" for event, _ in events_seen)
+        assert not any(event == "obstacle_detected" for event, _ in events_seen)
+        assert result.subtasks
+        assert any(task.status == "blocked" for task in result.subtasks)
+        assert mc.get_history(limit=1), "history should be recorded"
 
     def test_213_skills_loaded(self, alberto):
         from alberto.upstream_bridge import list_upstream_skills
