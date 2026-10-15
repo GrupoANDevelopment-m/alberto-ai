@@ -1,10 +1,10 @@
-"""Opt-in live end-to-end test: real provider, Alberto chat, and real tool execution.
+"""Opt-in live end-to-end test: real NVIDIA provider, Alberto chat, and real tool execution.
 
 Run:
   ALBERTO_LIVE_TESTS=1 NVIDIA_API_KEY=... python -m pytest -q tests/test_live_agent_conversation.py
 
-This test is intentionally excluded from the offline CI suites. It sends real
-requests to the configured NVIDIA OpenAI-compatible endpoint and may incur cost.
+Uses NVIDIA's documented Nemotron sampling settings. This test sends real requests
+and may incur provider cost; credentials are read only from the environment.
 """
 import os
 
@@ -25,29 +25,37 @@ def test_live_agent_remembers_conversation_and_executes_real_tool(tmp_path, monk
     sandbox = LocalSandbox(base_dir=tmp_path / "alberto-live-sandbox", allow_net=True)
     agent = Alberto(sandbox=sandbox)
 
-    # Configure the same real remote model for both normal chat and reasoning.
-    agent.model_set(
-        task="code",
-        provider="nvidia",
-        model_id=model_id,
-        base_url="https://integrate.api.nvidia.com/v1",
-        credential_env="NVIDIA_API_KEY",
-    )
-    agent.model_set(
-        task="reasoning",
-        provider="nvidia",
-        model_id=model_id,
-        base_url="https://integrate.api.nvidia.com/v1",
-        credential_env="NVIDIA_API_KEY",
-    )
+    # Nemotron 3.5 hosted API recommends temperature=1, top_p=0.95 and
+    # explicitly supports chat_template_kwargs for reasoning control.
+    nvidia_options = {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "chat_template_kwargs": {"enable_thinking": True},
+    }
+    for task in ("code", "reasoning"):
+        agent.model_set(
+            task=task,
+            provider="nvidia",
+            model_id=model_id,
+            base_url="https://integrate.api.nvidia.com/v1",
+            credential_env="NVIDIA_API_KEY",
+            **nvidia_options,
+        )
 
     try:
         first = agent.chat(
             "Para este teste de conversa, o código temporário é cobalt-731. "
             "Responde apenas com a palavra PRONTO."
         )
-        assert isinstance(first.get("response"), str) and first["response"].strip(), (
+        first_answer = first.get("response", "")
+        assert isinstance(first_answer, str) and first_answer.strip(), (
             f"Alberto.chat returned no answer: {first!r}"
+        )
+        assert not first_answer.startswith("[sem modelo configurado"), (
+            f"Provider/router error was returned as chat content: {first_answer}"
+        )
+        assert not first_answer.startswith("[tool loop failed"), (
+            f"Tool-loop error was returned as chat content: {first_answer}"
         )
         conversation_id = first.get("conversation_id")
         assert conversation_id, "Alberto.chat must return a conversation_id"
@@ -63,8 +71,7 @@ def test_live_agent_remembers_conversation_and_executes_real_tool(tmp_path, monk
             f"response={answer!r}"
         )
 
-        # Force an actual provider tool-call round trip. memory_set writes to
-        # the real SQLite-backed MiMo memory; no mocked router or tool registry.
+        # Real provider tool-call round trip; no mocked router or tool registry.
         key = "live_integration_probe"
         value = "tool-executed-cobalt-731"
         tool_result = run_tool_loop(
@@ -88,10 +95,13 @@ def test_live_agent_remembers_conversation_and_executes_real_tool(tmp_path, monk
             ],
             task="code",
             max_iterations=4,
-            max_tokens=512,
-            temperature=0,
+            max_tokens=1024,
+            temperature=1.0,
         )
-        assert not tool_result.get("error"), f"Live tool loop failed: {tool_result.get('error')}"
+        assert not tool_result.get("error"), (
+            f"Live tool loop failed: {tool_result.get('error')}; "
+            f"tool_result={tool_result!r}"
+        )
         called = [
             call for call in tool_result.get("tool_calls", [])
             if call.get("function", {}).get("name") == "memory_set"
