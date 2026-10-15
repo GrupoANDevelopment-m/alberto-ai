@@ -157,3 +157,39 @@ def test_pinned_http_connection_rejects_private_dns_result_before_connect(monkey
         connection.connect()
 
     assert calls == []
+
+def test_pinned_https_connection_pins_ip_but_keeps_tls_hostname(monkeypatch):
+    calls = []
+    raw_socket = object()
+    tls_socket = object()
+
+    class FakeTLSContext:
+        def wrap_socket(self, sock, server_hostname):
+            assert sock is raw_socket
+            calls.append(("tls_hostname", server_hostname))
+            return tls_socket
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        calls.append(("connect", address))
+        return raw_socket
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    connection = function_caller._PinnedHTTPSConnection(
+        "secure.example", timeout=1, context=FakeTLSContext()
+    )
+    connection.connect()
+
+    assert calls == [
+        ("connect", ("93.184.216.34", 443)),
+        ("tls_hostname", "secure.example"),
+    ]
+    assert connection.sock is tls_socket
+
