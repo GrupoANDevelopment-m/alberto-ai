@@ -113,10 +113,13 @@ def test_mimo_read_rejects_invalid_line_ranges(tmp_path, start_line, max_lines):
 
 
 def test_mimo_read_streams_only_requested_window_and_caps_output(tmp_path):
+    from types import SimpleNamespace
+
     file_path = tmp_path / "large.txt"
     file_path.write_text("first\n" + ("x" * 250_000) + "\nlast\n", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
 
-    output, is_error = tool_read(None, {
+    output, is_error = tool_read(alberto, {
         "path": str(file_path), "start_line": 1, "max_lines": 1
     })
 
@@ -128,11 +131,14 @@ def test_mimo_read_streams_only_requested_window_and_caps_output(tmp_path):
 
 
 def test_mimo_read_rejects_files_over_size_limit_before_loading(tmp_path):
+    from types import SimpleNamespace
+
     file_path = tmp_path / "oversized.txt"
     with file_path.open("wb") as stream:
         stream.truncate(10 * 1024 * 1024 + 1)
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
 
-    output, is_error = tool_read(None, {"path": str(file_path)})
+    output, is_error = tool_read(alberto, {"path": str(file_path)})
     assert is_error is True
     assert "10 MiB limit" in output
 
@@ -147,6 +153,21 @@ def test_file_read_rejects_file_outside_configured_sandbox_even_under_tmp(tmp_pa
     alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: sandbox))
 
     output, is_error = tool_file_read(alberto, {"path": str(outside)})
+
+    assert is_error is True
+    assert "inside configured sandbox" in output
+    assert "must not be read" not in output
+
+def test_mimo_read_rejects_file_outside_configured_sandbox(tmp_path):
+    from types import SimpleNamespace
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be read", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: sandbox))
+
+    output, is_error = tool_read(alberto, {"path": str(outside)})
 
     assert is_error is True
     assert "inside configured sandbox" in output
