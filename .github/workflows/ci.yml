@@ -133,5 +133,5 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           ALBERTO_LIVE_TESTS: "1"
-          ALBERTO_LIVE_MODEL_ID: ${{ vars.ALBERTO_LIVE_MODEL_ID || 'meta/llama-3.3-70b-instruct' }}
+          ALBERTO_LIVE_MODEL_ID: ${{ vars.ALBERTO_LIVE_MODEL_ID || 'nvidia/nemotron-3.5-lightning-30b-a3b' }}
         run: python -m pytest -q -s tests/test_live_agent_conversation.py
