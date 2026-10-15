@@ -213,3 +213,54 @@ def test_skill_cli_run_all_refuses_host_execution_without_opt_in(tmp_path, monke
     assert result == 1
     assert fake.calls == []
     assert "Docker isolation is required" in capsys.readouterr().err
+
+
+def test_generated_user_skill_requires_explicit_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
+    monkeypatch.delenv("ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION", raising=False)
+    user_dir = tmp_path / "skills" / "user"
+    skill_path = write_skill(
+        user_dir,
+        "generated-skill",
+        code_block("bash", "echo should-not-run"),
+    )
+    monkeypatch.setattr(skill_engine, "USER_SKILLS_DIR", user_dir)
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path)
+    sandbox = LocalSandbox(base_dir=tmp_path / "sandbox")
+    result = skill_engine.run_skill("generated-skill", [], sandbox=sandbox)
+    assert result["ok"] is False
+    assert "explicit operator approval is required" in result["error"]
+
+
+def test_generated_user_skill_can_run_only_after_explicit_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
+    monkeypatch.setenv("ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION", "1")
+    user_dir = tmp_path / "skills" / "user"
+    skill_path = write_skill(
+        user_dir,
+        "approved-generated-skill",
+        code_block("bash", "echo approved"),
+    )
+    monkeypatch.setattr(skill_engine, "USER_SKILLS_DIR", user_dir)
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path)
+    sandbox = LocalSandbox(base_dir=tmp_path / "sandbox")
+    result = skill_engine.run_skill("approved-generated-skill", [], sandbox=sandbox)
+    assert result["ok"] is True
+    assert result["stdout"].strip() == "approved"
+
+
+def test_generated_user_skill_symlink_escape_is_rejected(tmp_path, monkeypatch):
+    user_dir = tmp_path / "skills" / "user"
+    user_dir.mkdir(parents=True)
+    outside = write_skill(tmp_path / "outside", "external-skill", code_block("bash", "echo outside"))
+    link_dir = user_dir / "linked-skill"
+    try:
+        link_dir.symlink_to(outside.parent, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("symlinks are unavailable on this platform")
+    monkeypatch.setattr(skill_engine, "USER_SKILLS_DIR", user_dir)
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: link_dir / "SKILL.md")
+    result = skill_engine.run_skill("linked-skill", [])
+    assert result["ok"] is False
+    assert "symlinked skill paths" in result["error"] or "escapes the user skills directory" in result["error"]
