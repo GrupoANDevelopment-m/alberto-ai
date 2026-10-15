@@ -382,6 +382,10 @@ def main(argv: List[str]) -> int:
         if not path:
             print(f"skill '{args.name}' not found", file=sys.stderr)
             return 1
+        approval_error = _user_skill_approval_error(path)
+        if approval_error:
+            print(f"FAIL: {approval_error}", file=sys.stderr)
+            return 1
         content = path.read_text(encoding="utf-8", errors="replace")
         blocks = extract_code_blocks(content)
         executable_langs = ("bash", "sh", "shell", "python", "python3", "py")
