@@ -129,9 +129,6 @@ def show_skill(name: str) -> Dict[str, Any]:
     path = find_skill(name)
     if not path:
         return {"ok": False, "error": f"skill '{name}' not found"}
-    approval_error = _user_skill_approval_error(path)
-    if approval_error:
-        return {"ok": False, "error": approval_error}
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     # Frontmatter
@@ -181,6 +178,9 @@ def run_skill(name: str, args: List[str], *, sandbox=None, timeout: int = 60) ->
     path = find_skill(name)
     if not path:
         return {"ok": False, "error": f"skill '{name}' not found"}
+    approval_error = _user_skill_approval_error(path)
+    if approval_error:
+        return {"ok": False, "error": approval_error}
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     if not blocks:
