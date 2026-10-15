@@ -244,11 +244,11 @@ def test_mimo_distill(alberto):
 
 
 # === NemoClaw integration ===
-def test_nemoclaw_sandbox_status(alberto):
+def test_nemoclaw_sandbox_status_reports_unavailable_adapter(alberto):
     out = invoke_hermes_tool(alberto, "nemoclaw_sandbox", {"action": "list"})
-    assert out["ok"] is True
-    assert "sandbox" in out
-    assert "current" in out
+    assert out["ok"] is False
+    assert out["available"] is False
+    assert "no operation was performed" in out["error"]
 
 
 def test_nemoclaw_policy_presets(alberto):
@@ -265,23 +265,25 @@ def test_nemoclaw_policy_show(alberto):
     assert "github" in out["preset"]
 
 
-def test_nemoclaw_shields(alberto):
+def test_nemoclaw_shields_does_not_claim_unverified_state(alberto):
     out = invoke_hermes_tool(alberto, "nemoclaw_shields", {})
-    assert out["ok"] is True
-    assert "secrets_scanner" in out["shields"]
+    assert out["ok"] is False
+    assert out["shields"] is None
+    assert "unknown" in out["error"]
 
 
-def test_nemoclaw_inference(alberto):
+def test_nemoclaw_inference_reports_unknown_configuration(alberto):
     out = invoke_hermes_tool(alberto, "nemoclaw_inference", {})
-    assert out["ok"] is True
-    assert "providers" in out
-    assert "nvidia" in out["providers"]
+    assert out["ok"] is False
+    assert out["providers"] is None
+    assert out["default"] is None
 
 
-def test_nemoclaw_backup(alberto):
+def test_nemoclaw_backup_does_not_claim_success_without_execution(alberto):
     out = invoke_hermes_tool(alberto, "nemoclaw_backup", {"action": "backup"})
-    assert out["ok"] is True
-    assert "target" in out
+    assert out["ok"] is False
+    assert out["available"] is False
+    assert "no operation was performed" in out["error"]
 
 
 def test_nemoclaw_blueprint(alberto):
