@@ -2275,7 +2275,8 @@ def run_tool_loop(alberto, messages: List[Dict], *,
             })
     else:
         limit_reached = True
-        final_content = (history[-1].get("content", "") if history else "") or "[max iterations reached]"
+        # Do not return the last tool result as if it were the model's final answer.
+        final_content = "[max iterations reached]"
 
     result = {
         "iterations": iterations,
