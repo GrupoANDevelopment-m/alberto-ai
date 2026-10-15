@@ -24,6 +24,7 @@ deepseek-v4-pro, gpt-4, claude, minimax, etc.
 """
 from __future__ import annotations
 import json
+import http.client
 import os
 import re
 import subprocess
@@ -738,7 +739,7 @@ def _resolve_public_web_addresses(hostname: str, port: int) -> List[str]:
     return [str(address) for address in addresses]
 
 
-class _PinnedHTTPConnection(__import__("http.client", fromlist=["HTTPConnection"]).HTTPConnection):
+class _PinnedHTTPConnection(http.client.HTTPConnection):
     """Connect to a validated numeric IP, never a second hostname resolution."""
 
     def connect(self):
@@ -758,7 +759,7 @@ class _PinnedHTTPConnection(__import__("http.client", fromlist=["HTTPConnection"
         raise OSError("no usable public address")
 
 
-class _PinnedHTTPSConnection(__import__("http.client", fromlist=["HTTPSConnection"]).HTTPSConnection):
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """Pin the TCP destination while retaining TLS SNI and hostname validation."""
 
     def connect(self):
