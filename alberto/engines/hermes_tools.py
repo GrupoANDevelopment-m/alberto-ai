@@ -1491,10 +1491,10 @@ def _mimo_app_create(alberto, args):
         )
     except Exception as exc:
         return {"ok": False, "error": f"MiMo planning failed: {type(exc).__name__}"}
-    required_steps = {"spec", "tdd", "review"}
+    required_steps = ["spec", "tdd", "review"]
     if not isinstance(plan, dict) or not plan:
         return {"ok": False, "error": "MiMo did not return a usable application plan"}
-    failed = sorted(required_steps - set(plan))
+    failed = [step for step in required_steps if step not in plan]
     for step, value in plan.items():
         if (not isinstance(value, dict)
                 or not isinstance(value.get("content"), str)
@@ -1507,7 +1507,7 @@ def _mimo_app_create(alberto, args):
             failed.append(step)
     if failed:
         return {"ok": False, "error": "MiMo planning incomplete",
-                "failed_steps": sorted(set(failed)), "plan": plan}
+                "failed_steps": list(dict.fromkeys(failed)), "plan": plan}
 
     allowed_files = {"frontend/src/App.tsx", "backend/main.py"}
     generation_prompt = (
