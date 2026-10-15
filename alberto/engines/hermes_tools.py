@@ -151,19 +151,29 @@ def tool_browser(alberto, args):
 
 
 def tool_code_execution(alberto, args):
-    """Execute Python only through Alberto's configured sandbox."""
+    """Execute bounded Python source only through Alberto's configured sandbox."""
     code = args.get("code", "")
-    if not code:
+    if not isinstance(code, str) or not code.strip():
         return {"ok": False, "error": "missing 'code'"}
+    if len(code.encode("utf-8")) > 256 * 1024:
+        return {"ok": False, "error": "code exceeds the 256 KiB execution limit"}
     language = str(args.get("language", "python")).strip().lower()
     if language not in ("python", "python3", "py"):
         return {"ok": False, "error": "only Python execution is supported by the sandboxed code tool"}
+    raw_timeout = args.get("timeout", 60)
+    if isinstance(raw_timeout, bool):
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
+    try:
+        timeout = int(raw_timeout)
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
+    if str(raw_timeout).strip() != str(timeout) or not 1 <= timeout <= 120:
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
     sandbox = getattr(alberto, "sandbox", None)
     if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "write", None)) or not callable(getattr(sandbox, "home", None)):
         return {"ok": False, "error": "a configured sandbox is required for code execution"}
 
     import uuid
-    timeout = max(1, min(int(args.get("timeout", 60)), 120))
     filename = f".alberto-code-{uuid.uuid4().hex}.py"
     relative_path = Path(filename)
     file_path = Path(sandbox.home()) / filename
