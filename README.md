@@ -84,6 +84,8 @@ alberto --help
 
 The application must fail to initialize if Docker isolation cannot be established. Do not interpret a class name, a passing unit test, or a successful CLI launch as proof of container isolation. Validate the effective runtime mode and Docker security options in the deployment environment.
 
+**NemoClaw tool-adapter status:** the Hermes wrappers for sandbox management, shield status, inference-provider discovery, backup/restore/upgrade, and policy mutation are not yet connected to the live NemoClaw CLI. They now fail closed and report the operation/configuration as unavailable rather than returning simulated success or claiming unverified shields/providers are active. The sandbox mode described above is a separate runtime selection and must be validated independently.
+
 ### Additional execution controls
 
 - Treat downloaded or locally installed skills as executable code. Review provenance and permissions before enabling them.
