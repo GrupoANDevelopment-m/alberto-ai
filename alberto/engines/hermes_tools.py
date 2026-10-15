@@ -532,24 +532,65 @@ def tool_homeassistant(alberto, args):
     return {"ok": False, "error": "homeassistant not configured (HASS_URL + HASS_TOKEN)"}
 
 
+def _resolve_sandbox_output_path(sandbox, raw_output: str = "") -> Path:
+    """Resolve a TTS destination strictly inside the configured sandbox home."""
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        raise ValueError("a configured sandbox is required for TTS output")
+    home = Path(sandbox.home()).expanduser().resolve()
+    voice_root = (home / ".hermes" / "voice").resolve()
+    candidate = Path(raw_output).expanduser() if raw_output else voice_root / f"{int(time.time() * 1000)}.mp3"
+    if not candidate.is_absolute():
+        candidate = home / candidate
+    # Resolve existing symlinks in every existing path component before mkdir.
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        raise ValueError("TTS output path escapes sandbox home") from None
+    parent = resolved.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    # Re-resolve after directory creation to catch pre-existing or raced symlinks.
+    resolved_parent = parent.resolve()
+    try:
+        resolved_parent.relative_to(home)
+    except ValueError:
+        raise ValueError("TTS output parent escapes sandbox home") from None
+    if resolved.exists() and resolved.is_symlink():
+        raise ValueError("TTS output must not be a symbolic link")
+    return resolved_parent / resolved.name
+
+
 def tool_voice_tts(alberto, args):
-    """Real Hermes TTS — edge (free), elevenlabs, openai, MiniMax, mistral, gemini, xai, neutts, kitten, piper."""
+    """Real Hermes TTS, with output confined to the configured sandbox home."""
     text = args.get("text", "")
     provider = args.get("provider", "edge")
     voice = args.get("voice", "")
     output = args.get("output_path", "")
-    if not text:
+    if not isinstance(text, str) or not text.strip():
         return {"ok": False, "error": "missing 'text'"}
+    if not isinstance(provider, str) or not provider.strip():
+        return {"ok": False, "error": "invalid TTS provider"}
+    if output is not None and not isinstance(output, str):
+        return {"ok": False, "error": "output_path must be a string"}
+    try:
+        out = _resolve_sandbox_output_path(getattr(alberto, "sandbox", None), output or "")
+    except (OSError, ValueError, TypeError) as e:
+        return {"ok": False, "error": str(e)}
     mod = _try_import("tts_tool")
     if mod is not None:
         for fn_name in ("synthesize", "tts", "speak", "generate_speech"):
             fn = getattr(mod, fn_name, None)
             if fn:
                 try:
-                    out = output or str(alberto.sandbox.home() / f".hermes/voice/{int(time.time()*1000)}.mp3")
-                    Path(out).parent.mkdir(parents=True, exist_ok=True)
-                    result = fn(text=text, provider=provider, voice=voice, output=out)
-                    return {"ok": True, "output": out, "provider": provider, "result": result if not isinstance(result, str) else None}
+                    result = fn(text=text, provider=provider, voice=voice, output=str(out))
+                    if not out.is_file() or out.is_symlink():
+                        return {
+                            "ok": False,
+                            "error": f"tts.{provider} returned without creating a regular output file",
+                            "output": str(out),
+                        }
+                    return {"ok": True, "output": str(out), "provider": provider,
+                            "result": result if not isinstance(result, str) else None}
                 except Exception as e:
                     return {"ok": False, "error": f"tts.{provider}: {e}"}
     return {"ok": False, "error": f"tts_tool not available (provider={provider})"}
@@ -1660,25 +1701,55 @@ def _mimo_snapshot(alberto, args):
 
 
 def _mimo_worktree(alberto, args):
-    """MiMo git worktree. cwd defaults to sandbox home or current dir."""
-    import subprocess
-    path = args.get("path", "")
+    """Create a MiMo worktree through the configured sandbox, never host subprocess."""
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)) or not callable(getattr(sandbox, "run", None)):
+        return {"ok": False, "error": "a configured sandbox is required for worktree operations"}
+    raw_path = args.get("path", "")
     branch = args.get("branch", "alberto-session")
-    cwd = args.get("cwd") or str(alberto.sandbox.home())
-    if not path:
+    raw_cwd = args.get("cwd", "")
+    if not isinstance(raw_path, str) or not raw_path.strip():
         return {"ok": False, "error": "need 'path'"}
-    if not os.path.isdir(os.path.join(cwd, ".git")):
-        # Try to find a git repo upward from cwd
-        cur = cwd
-        while cur != "/":
-            if os.path.isdir(os.path.join(cur, ".git")):
-                cwd = cur
-                break
-            cur = os.path.dirname(cur)
-    r = subprocess.run(["git", "worktree", "add", "-b", branch, path],
-                      capture_output=True, text=True, cwd=cwd)
-    return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr,
-            "branch": branch, "path": path, "cwd": cwd}
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,119}", branch) or ".." in branch.split("/"):
+        return {"ok": False, "error": "invalid git branch name"}
+    try:
+        home = Path(sandbox.home()).expanduser().resolve()
+        requested_cwd = Path(raw_cwd).expanduser() if raw_cwd else home
+        if not requested_cwd.is_absolute():
+            requested_cwd = home / requested_cwd
+        requested_cwd = requested_cwd.resolve()
+        requested_cwd.relative_to(home)
+        target = Path(raw_path).expanduser()
+        if not target.is_absolute():
+            target = home / target
+        target = target.resolve()
+        target.relative_to(home)
+        if target == home or target.exists():
+            return {"ok": False, "error": "worktree path must be a new path inside sandbox home"}
+        # Find the nearest Git root, but never walk above the sandbox boundary.
+        repo = requested_cwd
+        while repo != home and not (repo / ".git").exists():
+            repo = repo.parent
+        if not (repo / ".git").exists():
+            return {"ok": False, "error": "no git repository found inside sandbox home"}
+        repo.relative_to(home)
+        cwd_rel = repo.relative_to(home)
+        target_rel = target.relative_to(home)
+        # Validate branch syntax using Git itself, inside the sandbox.
+        check = sandbox.run(["git", "check-ref-format", "--branch", branch],
+                            timeout=10, cwd=repo)
+        if check.returncode != 0:
+            return {"ok": False, "error": "invalid git branch name",
+                    "stderr": (check.stderr or "")[:500]}
+        result = sandbox.run(["git", "worktree", "add", "-b", branch, str(target_rel)],
+                             timeout=60, cwd=repo)
+        return {"ok": result.returncode == 0, "stdout": result.stdout or "",
+                "stderr": result.stderr or "", "branch": branch,
+                "path": str(target_rel), "cwd": str(cwd_rel)}
+    except ValueError:
+        return {"ok": False, "error": "worktree cwd or path escapes sandbox home"}
+    except Exception as e:
+        return {"ok": False, "error": f"worktree operation failed: {type(e).__name__}: {e}"}
 
 
 def _mimo_distill(alberto, args):
