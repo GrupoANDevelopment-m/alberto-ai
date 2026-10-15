@@ -642,12 +642,12 @@ def tool_glob(alberto, args: Dict) -> Tuple[str, bool]:
         return f"error: {e}", True
 
 
-@register_tool("grep")
 GREP_MAX_FILES = 1000
 GREP_MAX_FILE_BYTES = 5 * 1024 * 1024
 GREP_MAX_TOTAL_BYTES = 50 * 1024 * 1024
 
 
+@register_tool("grep")
 def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
     """Search sandbox files with strict path and resource bounds."""
     import re as _re
