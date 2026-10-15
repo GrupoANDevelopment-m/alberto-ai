@@ -304,3 +304,45 @@ def test_recovery_marks_subtask_finished_and_records_success(alberto, monkeypatc
     assert task.finished_at is not None
     assert task.error is None
     assert ("verified-skill", True) in outcomes
+
+
+
+def test_policy_denial_blocks_without_research_or_skill_mutation(alberto, monkeypatch):
+    from alberto.runtime.meta_controller import Plan, SubTask
+
+    mc = MetaController(alberto)
+    task = SubTask(id="policy-1", description="run untrusted skill", skill="untrusted")
+    plan = Plan(objective="policy boundary", subtasks=[task])
+    outcomes = []
+    monkeypatch.setattr(
+        mc, "_try_skill",
+        lambda *_args, **_kwargs: (
+            False, None, "skill execution refused: Docker isolation is required"
+        ),
+    )
+    monkeypatch.setattr(
+        mc.researcher, "search",
+        lambda *_args, **_kwargs: pytest.fail("must not research around policy denial"),
+    )
+    monkeypatch.setattr(
+        mc.learner, "lesson_learned",
+        lambda **_kwargs: pytest.fail("must not learn/evolve from a policy denial"),
+    )
+    monkeypatch.setattr(
+        mc, "_try_evolve_skill",
+        lambda *_args, **_kwargs: pytest.fail("must not evolve skill after policy denial"),
+    )
+    monkeypatch.setattr(
+        mc.skill_manager, "record_outcome",
+        lambda *args, **kwargs: outcomes.append((args, kwargs)),
+    )
+    events = []
+    mc.on_event(lambda event, data: events.append((event, data)))
+
+    mc._execute_subtask(plan, task)
+
+    assert task.status == "blocked"
+    assert task.finished_at is not None
+    assert "execution refused" in task.error
+    assert outcomes == []
+    assert any(event == "subtask_blocked" for event, _ in events)
