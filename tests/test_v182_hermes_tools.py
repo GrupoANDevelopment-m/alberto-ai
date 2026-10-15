@@ -456,3 +456,45 @@ def test_mimo_checkpoint_honors_explicit_session_id_when_session_list_is_empty()
     assert result == {"ok": True, "checkpoint": "saved"}
     assert calls == [("remote-session", "manual id")]
 
+class TestNemoClawUnavailableAdaptersFailClosed:
+    def test_unwired_sandbox_shields_and_inference_do_not_claim_live_state(self):
+        from alberto.engines.hermes_tools import (
+            _nemoclaw_sandbox, _nemoclaw_shields, _nemoclaw_inference,
+        )
+
+        sandbox = _nemoclaw_sandbox(None, {"action": "list", "name": "test"})
+        assert sandbox["ok"] is False
+        assert sandbox["available"] is False
+        assert "no operation was performed" in sandbox["error"]
+        shields = _nemoclaw_shields(None, {})
+        assert shields["ok"] is False
+        assert shields["shields"] is None
+        assert "unknown" in shields["error"]
+        inference = _nemoclaw_inference(None, {})
+        assert inference["ok"] is False
+        assert inference["providers"] is None
+        assert inference["default"] is None
+
+    @pytest.mark.parametrize("action", ["backup", "restore", "upgrade"])
+    def test_unwired_backup_restore_upgrade_do_not_claim_success(self, action):
+        from alberto.engines.hermes_tools import _nemoclaw_backup
+
+        result = _nemoclaw_backup(None, {"action": action, "target": "/tmp/backup"})
+        assert result["ok"] is False
+        assert result["available"] is False
+        assert result["action"] == action
+        assert "no operation was performed" in result["error"]
+
+    def test_policy_mutation_and_unknown_blueprint_action_fail_closed(self, monkeypatch, tmp_path):
+        from alberto.engines import hermes_tools as tools
+
+        # The local policy reader may list/show files, but must not claim to apply policy.
+        result = tools._nemoclaw_policy(None, {"action": "set", "policy": "allow-all"})
+        assert result["ok"] is False
+        assert "no policy was applied" in result["error"]
+
+        monkeypatch.setattr(tools, "__file__", str(tmp_path / "hermes_tools.py"))
+        result = tools._nemoclaw_blueprint(None, {"action": "mutate"})
+        assert result["ok"] is False
+        assert "not supported" in result["error"]
+
