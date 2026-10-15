@@ -1,8 +1,11 @@
-"""MCP (Model Context Protocol) client — connects to MCP servers.
+"""MCP client for stdio servers; HTTP/SSE are reserved but not implemented.
 
-Supports:
-- stdio transport (subprocess)
-- HTTP/SSE transport (network)
+Implemented:
+- stdio transport (subprocess, JSON-RPC initialize/tools/list/tools/call)
+
+Not implemented (rejected explicitly at runtime):
+- HTTP transport
+- SSE transport
 
 Discovery:
 - `mcp://` URIs in skills or shortcuts
@@ -41,7 +44,7 @@ class MCPServer:
 
 
 class MCPClient:
-    """Manages connections to MCP servers (stdio only for now)."""
+    """Manage MCP stdio servers. HTTP/SSE config entries are not executable yet."""
 
     def __init__(self, config_path: Optional[Path] = None):
         if config_path is None:
