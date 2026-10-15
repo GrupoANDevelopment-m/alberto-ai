@@ -18,8 +18,12 @@ def make_tester(tmp_path):
     [
         ("/", 0, 1, "n_requests"),
         ("/", -1, 1, "n_requests"),
+        ("/", 1001, 1, "n_requests"),
+        ("/", True, 1, "n_requests"),
         ("/", 1, 0, "concurrency"),
         ("/", 1, -2, "concurrency"),
+        ("/", 1, 65, "concurrency"),
+        ("/", 1, True, "concurrency"),
         ("https://example.invalid/", 1, 1, "endpoint"),
         ("//example.invalid/path", 1, 1, "endpoint"),
         ("relative", 1, 1, "endpoint"),
