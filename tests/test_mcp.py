@@ -120,3 +120,53 @@ def test_server_env_rejects_invalid_values():
         MCPClient._build_server_env({"BAD": "value" + chr(0)})
     with pytest.raises(ValueError, match="invalid key"):
         MCPClient._build_server_env({"BAD-NAME": "value"})
+
+
+
+def test_load_config_skips_malformed_entries_and_keeps_valid_servers(tmp_path, capsys):
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({
+        "bad-null": None,
+        "bad-args": {
+            "transport": "stdio", "command": sys.executable,
+            "args": ["-c", 3],
+        },
+        "good": {
+            "transport": "stdio", "command": sys.executable,
+            "args": ["-c", "print('ok')"], "env": {},
+        },
+    }))
+    client = MCPClient(config_path=config)
+    assert "good" in client.servers
+    assert "bad-null" not in client.servers
+    assert "bad-args" not in client.servers
+    assert "ignoring invalid server config" in capsys.readouterr().err
+
+
+def test_load_config_rejects_non_object_root(tmp_path, capsys):
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps([{"name": "not-a-map"}]))
+    client = MCPClient(config_path=config)
+    assert client.servers == {}
+    assert "root must be a JSON object" in capsys.readouterr().err
+
+
+def test_add_rejects_invalid_server_config(tmp_path):
+    import pytest
+    client = MCPClient(config_path=tmp_path / "mcp.json")
+    with pytest.raises(ValueError, match="invalid MCP server configuration"):
+        client.add("bad", command=sys.executable, args=["-c", 42])
+    with pytest.raises(ValueError, match="invalid MCP server configuration"):
+        client.add("missing-command", transport="stdio")
+    with pytest.raises(ValueError, match="invalid MCP server configuration"):
+        client.add("unsupported", transport="grpc", command="server")
+
+
+def test_http_and_sse_are_explicitly_unsupported_by_current_runtime(tmp_path):
+    client = MCPClient(config_path=tmp_path / "mcp.json")
+    client.servers["remote-http"] = __import__(
+        "alberto.runtime.mcp", fromlist=["MCPServer"]
+    ).MCPServer(name="remote-http", transport="http", url="https://example.invalid/mcp")
+    result = client.call("remote-http", "echo", {})
+    assert result["ok"] is False
+    assert "not implemented" in result["error"]
