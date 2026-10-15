@@ -56,6 +56,8 @@ def test_grep_blocks_protected_search_root():
 
 
 def test_grep_skips_symlink_to_protected_file(tmp_path):
+    from types import SimpleNamespace
+
     protected = Path("/etc/passwd")
     if not protected.exists():
         pytest.skip("requires a Unix-like test runner with /etc/passwd")
@@ -64,8 +66,9 @@ def test_grep_skips_symlink_to_protected_file(tmp_path):
         link.symlink_to(protected)
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"symlink creation unavailable: {exc}")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
 
-    output, is_error = tool_grep(None, {"pattern": "root:", "path": str(tmp_path)})
+    output, is_error = tool_grep(alberto, {"pattern": "root:", "path": str(tmp_path)})
     assert is_error is False
     assert "no matches" in output
     assert "root:x:0:0" not in output
@@ -172,4 +175,31 @@ def test_mimo_read_rejects_file_outside_configured_sandbox(tmp_path):
     assert is_error is True
     assert "inside configured sandbox" in output
     assert "must not be read" not in output
+
+def test_grep_rejects_search_path_outside_sandbox(tmp_path):
+    from types import SimpleNamespace
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret phrase", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: sandbox))
+
+    output, is_error = tool_grep(alberto, {
+        "pattern": "secret", "path": str(outside)
+    })
+
+    assert is_error is True
+    assert "inside configured sandbox" in output
+    assert "secret phrase" not in output
+
+
+@pytest.mark.parametrize("max_results", [0, -1, 201, True, 1.5, "invalid"])
+def test_grep_rejects_invalid_result_limits(max_results):
+    output, is_error = tool_grep(None, {
+        "pattern": "anything", "max_results": max_results
+    })
+
+    assert is_error is True
+    assert "invalid max_results" in output
 
