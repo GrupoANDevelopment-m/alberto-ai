@@ -331,7 +331,7 @@ def cmd_skill(args, alberto):
         # Delegate to the security-hardened skill engine. A second execution
         # implementation here could bypass its sandbox and approval policy.
         from alberto.runtime.skill_engine import main as skill_main
-        return skill_main(["run-all", *args.skill_args, "--timeout", str(args.timeout)])
+        return skill_main(["run-all", "--timeout", str(args.timeout), "--", *args.skill_args])
 
     return 0
 
