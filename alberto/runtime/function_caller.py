@@ -2192,26 +2192,55 @@ def run_tool_loop(alberto, messages: List[Dict], *,
                   max_tokens: int = 4096, temperature: float = 0.7) -> Dict:
     """Run an agent loop: call LLM with tools, execute tool_calls, repeat.
 
-    Returns the final response dict with conversation history.
+    Returns the final response dict with conversation history. Invalid provider
+    responses fail closed with a structured error instead of escaping as an
+    IndexError/AttributeError or being silently converted into an empty answer.
     """
-    tools = get_tool_schemas()
     history = list(messages)  # copy
     iterations = 0
     final_content = ""
     final_tool_calls = []
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
+        return {
+            "error": "max_iterations must be a positive integer",
+            "iterations": 0, "history": history, "final_content": "",
+            "tool_calls": [],
+        }
 
+    tools = get_tool_schemas()
+
+    def loop_error(message: str) -> Dict:
+        return {
+            "error": message,
+            "iterations": iterations,
+            "history": history,
+            "final_content": final_content,
+            "tool_calls": final_tool_calls,
+        }
+
+    limit_reached = False
     while iterations < max_iterations:
         iterations += 1
         try:
             resp = alberto.router.invoke(task, history, tools=tools, tool_choice="auto",
                                         max_tokens=max_tokens, temperature=temperature)
         except Exception as e:
-            return {"error": f"router.invoke failed: {e}", "iterations": iterations,
-                    "history": history, "final_content": final_content}
+            return loop_error(f"router.invoke failed: {type(e).__name__}: {e}")
 
-        msg = resp.get("choices", [{}])[0].get("message", {})
+        if not isinstance(resp, dict):
+            return loop_error("router.invoke returned invalid response: expected an object")
+        choices = resp.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            return loop_error("router.invoke returned invalid response: choices must contain an object")
+        msg = choices[0].get("message")
+        if not isinstance(msg, dict):
+            return loop_error("router.invoke returned invalid response: message must be an object")
         content = msg.get("content") or ""
+        if not isinstance(content, str):
+            return loop_error("router.invoke returned invalid response: message content must be a string")
         tool_calls = msg.get("tool_calls") or []
+        if not isinstance(tool_calls, list) or any(not isinstance(tc, dict) for tc in tool_calls):
+            return loop_error("router.invoke returned invalid response: tool_calls must be a list of objects")
 
         # Add assistant message to history
         history.append({
@@ -2221,37 +2250,42 @@ def run_tool_loop(alberto, messages: List[Dict], *,
         })
 
         if not tool_calls:
-            # LLM is done, no more tools
             final_content = content
-            # Don't reset final_tool_calls here — keep history
             break
 
         # Execute each tool call
         final_tool_calls.extend(tool_calls)
         for tc in tool_calls:
             fn = tc.get("function", {})
+            if not isinstance(fn, dict):
+                fn = {}
             name = fn.get("name", "")
             raw_args = fn.get("arguments", "{}")
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except Exception:
+            except (TypeError, ValueError):
+                args = {}
+            if not isinstance(args, dict):
                 args = {}
             output, is_error = execute_tool(alberto, name, args)
             history.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
-                "content": f"[{name} {'ERROR' if is_error else 'OK'}]\n{output[:2000]}",
+                "content": f"[{name} {'ERROR' if is_error else 'OK'}]\n{str(output)[:2000]}",
             })
     else:
-        # Hit max_iterations
-        final_content = history[-1].get("content", "") if history else "[max iterations reached]"
+        limit_reached = True
+        final_content = (history[-1].get("content", "") if history else "") or "[max iterations reached]"
 
-    return {
+    result = {
         "iterations": iterations,
         "history": history,
         "final_content": final_content,
         "tool_calls": final_tool_calls,
     }
+    if limit_reached:
+        result["error"] = "max_iterations reached before the model returned a final answer"
+    return result
 
 
 # ===================== MiMo name aliases (hyphenated names) =====================

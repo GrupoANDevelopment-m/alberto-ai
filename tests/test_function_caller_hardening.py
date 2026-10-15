@@ -136,3 +136,112 @@ def test_execute_shell_command_rejects_nonexistent_working_directory(tmp_path):
         SimpleNamespace(sandbox=Sandbox(), _cwd=str(home / "missing")), "pwd", 5
     )
     assert calls == [str(home.resolve())]
+
+
+
+def test_run_tool_loop_executes_registered_tool_and_continues_with_tool_result():
+    import json
+    from alberto.runtime.function_caller import run_tool_loop
+
+    tool_call = {
+        "id": "call-question-1",
+        "type": "function",
+        "function": {
+            "name": "question",
+            "arguments": json.dumps({"question": "Should I continue?"}),
+        },
+    }
+    responses = [
+        {"choices": [{"message": {"content": "", "tool_calls": [tool_call]}}]},
+        {"choices": [{"message": {"content": "Proceed with the review.", "tool_calls": []}}]},
+    ]
+    invocations = []
+
+    class Router:
+        def invoke(self, task, history, **kwargs):
+            invocations.append({"task": task, "history": list(history), "kwargs": kwargs})
+            return responses.pop(0)
+
+    result = run_tool_loop(
+        SimpleNamespace(router=Router()),
+        [{"role": "user", "content": "I need a decision"}],
+        max_iterations=3,
+    )
+
+    assert result["final_content"] == "Proceed with the review."
+    assert result["iterations"] == 2
+    assert result["tool_calls"] == [tool_call]
+    tool_messages = [message for message in result["history"] if message["role"] == "tool"]
+    assert len(tool_messages) == 1
+    assert "[question OK]" in tool_messages[0]["content"]
+    assert "Should I continue?" in tool_messages[0]["content"]
+    assert any(message["role"] == "tool" for message in invocations[1]["history"])
+    assert invocations[0]["kwargs"]["tool_choice"] == "auto"
+
+
+@pytest.mark.parametrize("max_iterations", [0, -1, True, 1.5, "3"])
+def test_run_tool_loop_rejects_invalid_iteration_budget_without_calling_router(max_iterations):
+    from alberto.runtime.function_caller import run_tool_loop
+
+    calls = []
+    router = SimpleNamespace(invoke=lambda *args, **kwargs: calls.append((args, kwargs)))
+    result = run_tool_loop(
+        SimpleNamespace(router=router), [{"role": "user", "content": "do work"}],
+        max_iterations=max_iterations,
+    )
+
+    assert result["iterations"] == 0
+    assert "positive integer" in result["error"]
+    assert calls == []
+
+
+def test_run_tool_loop_returns_structured_error_for_empty_provider_choices():
+    from alberto.runtime.function_caller import run_tool_loop
+
+    router = SimpleNamespace(invoke=lambda *args, **kwargs: {"choices": []})
+    result = run_tool_loop(
+        SimpleNamespace(router=router), [{"role": "user", "content": "do work"}]
+    )
+
+    assert result["iterations"] == 1
+    assert "choices must contain an object" in result["error"]
+    assert result["tool_calls"] == []
+
+
+def test_run_tool_loop_surfaces_router_exception_without_losing_contract():
+    from alberto.runtime.function_caller import run_tool_loop
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("provider offline")
+
+    result = run_tool_loop(
+        SimpleNamespace(router=SimpleNamespace(invoke=fail)),
+        [{"role": "user", "content": "do work"}],
+    )
+
+    assert result["iterations"] == 1
+    assert "RuntimeError: provider offline" in result["error"]
+    assert result["history"][0]["content"] == "do work"
+    assert result["tool_calls"] == []
+
+
+def test_run_tool_loop_reports_iteration_limit_instead_of_empty_answer():
+    import json
+    from alberto.runtime.function_caller import run_tool_loop
+
+    call = {
+        "id": "call-loop",
+        "type": "function",
+        "function": {"name": "question", "arguments": json.dumps({"question": "Again?"})},
+    }
+    router = SimpleNamespace(invoke=lambda *args, **kwargs: {
+        "choices": [{"message": {"content": "", "tool_calls": [call]}}]
+    })
+    result = run_tool_loop(
+        SimpleNamespace(router=router), [{"role": "user", "content": "do work"}],
+        max_iterations=1,
+    )
+
+    assert result["iterations"] == 1
+    assert result["final_content"] == "[max iterations reached]"
+    assert "max_iterations reached" in result["error"]

@@ -228,3 +228,61 @@ def test_chat_keeps_user_turn_last_after_injecting_system_context(monkeypatch, f
     assert "INTEGRATION_CONTEXT" in system_contents
     assert "ROUTE_CONTEXT" in system_contents
     assert ("MAVIS_CONTEXT" in system_contents) is fallback
+
+
+
+def test_chat_surfaces_tool_loop_failure_instead_of_empty_content(monkeypatch):
+    import alberto.agent as agent_module
+    import alberto.runtime.function_caller as function_caller
+    import alberto.runtime.smart_router_v2 as smart_router_v2
+    import alberto.runtime.skill_engine as skill_engine
+    from alberto.conversation import Conversation
+
+    agent = Alberto.__new__(Alberto)
+    conversation = Conversation(id="tool-loop-error", started_at=1.0)
+
+    class Store:
+        def get(self, conversation_id):
+            return conversation if conversation_id == conversation.id else None
+
+        def latest_active(self, max_age_seconds=600):
+            return None
+
+        def create(self):
+            return conversation
+
+        def save(self, value):
+            assert value is conversation
+
+    agent.conversations = Store()
+    agent.catalog = SimpleNamespace(active_squad=None)
+    agent.mimo = SimpleNamespace(goal_get=lambda: None)
+    strategy = SimpleNamespace(
+        mode="solo", squad=None, task_routing="code", engine="router", reason="test"
+    )
+    agent.orchestrator = SimpleNamespace(decide=lambda prompt, active_squad: strategy)
+    agent.router = SimpleNamespace(invoke=lambda *args, **kwargs: pytest.fail("router should be wrapped"))
+    agent._build_integration_context = lambda: ""
+    agent._supports_function_calling = lambda: True
+
+    monkeypatch.setattr(agent_module, "detect_intent", lambda prompt: {})
+    monkeypatch.setattr(agent_module, "recall_memory", lambda _agent, _prompt: "")
+    monkeypatch.setattr(agent_module, "ALBERTO_SYSTEM_PROMPT", lambda _agent: "PERSONA")
+    monkeypatch.setattr(agent_module, "build_catalog_block", lambda _agent: "CATALOG")
+    monkeypatch.setattr(agent_module, "build_messages", lambda conv, **kwargs: [
+        {"role": "system", "content": "PERSONA"},
+        {"role": "user", "content": conv.turns[-1].content},
+    ])
+    monkeypatch.setattr(smart_router_v2, "route_intent", lambda _prompt: {"route": "code"})
+    monkeypatch.setattr(smart_router_v2, "build_route_prompt", lambda _route: "ROUTE_CONTEXT")
+    monkeypatch.setattr(skill_engine, "auto_invoke_skill", lambda _prompt: None)
+    monkeypatch.setattr(agent_module, "is_fallback_model", lambda _agent: False)
+    monkeypatch.setattr(function_caller, "run_tool_loop", lambda *args, **kwargs: {
+        "error": "router.invoke failed: RuntimeError: provider offline",
+        "iterations": 1, "history": [], "final_content": "", "tool_calls": [],
+    })
+
+    result = agent.chat("write code safely", conversation_id="tool-loop-error")
+
+    assert "tool loop failed" in result["response"]
+    assert "provider offline" in result["response"]

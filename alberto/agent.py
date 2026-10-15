@@ -341,7 +341,10 @@ class Alberto:
                     fc_result = run_tool_loop(self, messages, task="code",
                                               max_iterations=8, max_tokens=2048,
                                               temperature=0.7)
-                    response_text = fc_result["final_content"] or "[no content]"
+                    if fc_result.get("error"):
+                        response_text = f"[tool loop failed: {fc_result['error']}]"
+                    else:
+                        response_text = fc_result.get("final_content") or "[no content]"
                     # Surface tool calls to the rest of the pipeline
                     for tc in fc_result.get("tool_calls", []):
                         tool_calls.append({
