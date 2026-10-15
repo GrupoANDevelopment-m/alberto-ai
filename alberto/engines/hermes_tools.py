@@ -1367,7 +1367,10 @@ def _mimo_session(alberto, args):
     if action == "list":
         return {"ok": True, "sessions": alberto.mimo.session_list()}
     if action == "checkpoint":
-        sid = args.get("session_id") or alberto.mimo.session_list()[0]["id"] if alberto.mimo.session_list() else None
+        sid = args.get("session_id")
+        if not sid:
+            sessions = alberto.mimo.session_list()
+            sid = sessions[0].get("id") if sessions and isinstance(sessions[0], dict) else None
         if not sid:
             return {"ok": False, "error": "no session_id and no sessions"}
         return {"ok": True, "checkpoint": alberto.mimo.checkpoint(sid, note=args.get("note", ""))}
