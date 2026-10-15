@@ -267,9 +267,28 @@ class MetaController:
         return parts
 
     def _pick_skill(self, task: str) -> Optional[str]:
-        """Use SkillManager.recommend to pick the best skill."""
-        recs = self.skill_manager.recommend(task, top=1)
-        return recs[0]["skill"]["name"] if recs else None
+        """Pick a recommended skill only when the task has lexical relevance.
+
+        Recommendation statistics may rank a historically successful but unrelated
+        skill first. The lexical gate prevents that fallback and lets execution
+        block safely when no relevant capability is available.
+        """
+        relevant = self.skill_manager.search(task, limit=5, min_score=0.1)
+        if not relevant:
+            return None
+        relevant_names = {
+            item.get("skill", {}).get("name")
+            for item in relevant
+            if isinstance(item, dict) and isinstance(item.get("skill"), dict)
+        }
+        recs = self.skill_manager.recommend(task, top=5)
+        for item in recs:
+            skill = item.get("skill", {}) if isinstance(item, dict) else {}
+            name = skill.get("name") if isinstance(skill, dict) else None
+            if name in relevant_names:
+                return name
+        first = relevant[0].get("skill", {})
+        return first.get("name") if isinstance(first, dict) else None
 
     def execute(self, plan: Plan) -> Plan:
         """Run the plan. Returns updated plan."""

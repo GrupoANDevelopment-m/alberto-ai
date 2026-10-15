@@ -83,6 +83,30 @@ class TestMetaController:
         assert len(plan.subtasks) >= 1
         assert plan.status == "executing"
 
+    def test_pick_skill_refuses_unrelated_fallback(self, alberto, monkeypatch):
+        mc = MetaController(alberto)
+        monkeypatch.setattr(mc.skill_manager, "search", lambda *args, **kwargs: [])
+        monkeypatch.setattr(
+            mc.skill_manager, "recommend",
+            lambda *args, **kwargs: [{"skill": {"name": "historically-successful-unrelated"}}],
+        )
+        assert mc._pick_skill("an intent with no matching capability") is None
+
+    def test_pick_skill_filters_recommendations_by_relevance(self, alberto, monkeypatch):
+        mc = MetaController(alberto)
+        monkeypatch.setattr(
+            mc.skill_manager, "search",
+            lambda *args, **kwargs: [{"skill": {"name": "relevant-skill"}}],
+        )
+        monkeypatch.setattr(
+            mc.skill_manager, "recommend",
+            lambda *args, **kwargs: [
+                {"skill": {"name": "unrelated-skill"}, "score": 0.99},
+                {"skill": {"name": "relevant-skill"}, "score": 0.4},
+            ],
+        )
+        assert mc._pick_skill("task with relevant terms") == "relevant-skill"
+
     def test_execute_with_obstacle(self, alberto):
         mc = MetaController(alberto)
         # Use a skill that will fail (no browser installed)

@@ -84,3 +84,39 @@ def test_call_rejects_non_object_arguments(tmp_path):
     result = client.call("fake", "echo", ["not", "an", "object"])
     assert result["ok"] is False
     assert "must be an object" in result["error"]
+
+
+def test_server_process_does_not_inherit_unrelated_environment_secrets(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    client.servers["fake"].env = {"MCP_EXPLICIT_SETTING": "allowed"}
+    monkeypatch.setenv("ALBERTO_PRIVATE_TEST_TOKEN", "must-not-leak")
+    captured = {}
+
+    class FakeProcess:
+        stdin = None
+        stdout = None
+        stderr = None
+
+        def poll(self):
+            return 0
+
+    def fake_popen(*args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr("alberto.runtime.mcp.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(MCPClient, "_initialize_process", lambda proc: ["echo"])
+    assert client.connect("fake") is True
+    assert "ALBERTO_PRIVATE_TEST_TOKEN" not in captured["env"]
+    assert captured["env"]["MCP_EXPLICIT_SETTING"] == "allowed"
+    assert "PATH" in captured["env"]
+    client.disconnect("fake")
+
+
+def test_server_env_rejects_invalid_values():
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid key"):
+        MCPClient._build_server_env({"BAD": "value" + chr(0)})
+    with pytest.raises(ValueError, match="invalid key"):
+        MCPClient._build_server_env({"BAD-NAME": "value"})

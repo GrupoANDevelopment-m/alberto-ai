@@ -222,6 +222,26 @@ class MCPClient:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _build_server_env(configured: Dict[str, str]) -> Dict[str, str]:
+        """Pass a minimal process environment; secrets require explicit server config."""
+        allowed = {
+            "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
+            "SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC",
+        }
+        env = {key: value for key, value in os.environ.items() if key in allowed}
+        if not isinstance(configured, dict):
+            raise ValueError("MCP server env must be an object of string values")
+        for key, value in configured.items():
+            if (not isinstance(key, str) or not key
+                    or not key.replace("_", "a").isalnum()
+                    or key[0].isdigit()
+                    or not isinstance(value, str)
+                    or chr(0) in key or chr(0) in value):
+                raise ValueError("MCP server env contains an invalid key or non-string value")
+            env[key] = value
+        return env
+
     def connect(self, name: str) -> bool:
         """Start an MCP stdio server and complete the protocol handshake."""
         srv = self.servers.get(name)
@@ -231,7 +251,7 @@ class MCPClient:
             return True
         proc = None
         try:
-            env = {**os.environ, **srv.env}
+            env = self._build_server_env(srv.env)
             proc = subprocess.Popen(
                 [srv.command] + srv.args,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -274,7 +294,7 @@ class MCPClient:
 
         proc = None
         try:
-            env = {**os.environ, **srv.env}
+            env = self._build_server_env(srv.env)
             proc = subprocess.Popen(
                 [srv.command] + srv.args,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
