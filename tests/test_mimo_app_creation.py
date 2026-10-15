@@ -282,3 +282,25 @@ def test_mimo_app_create_requires_configured_sandbox(tmp_path):
     result = _mimo_app_create(SimpleNamespace(mimo=None), {"name": "no-sandbox", "spec": "an app"})
     assert result["ok"] is False
     assert "configured sandbox" in result["error"]
+
+
+def test_mimo_app_create_refuses_host_materialization_for_docker_sandbox(tmp_path):
+    home = tmp_path / "container-home"
+    home.mkdir()
+    calls = []
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            calls.append("compose")
+            raise AssertionError("planning must not run before the sandbox mode is supported")
+
+    sandbox = SimpleNamespace(home=lambda: home, isolation_level="docker-container")
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=sandbox),
+        {"name": "docker-app", "spec": "A small app"},
+    )
+
+    assert result["ok"] is False
+    assert "Docker mode is refused" in result["error"]
+    assert calls == []
+    assert not (home / "apps").exists()
