@@ -175,3 +175,47 @@ def test_http_and_sse_are_explicitly_unsupported_by_current_runtime(tmp_path):
     result = client.call("remote-http", "echo", {})
     assert result["ok"] is False
     assert "not implemented" in result["error"]
+
+
+def test_call_propagates_tool_error_and_terminates_server_process(tmp_path, monkeypatch):
+    import subprocess
+
+    failing_server = r"""
+import json
+import sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "failing", "version": "1.0"}}
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],
+                          "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}}),
+              flush=True)
+    elif method == "tools/call":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],
+                          "result": {"isError": True, "content": [{"type": "text", "text": "tool failed"}]}}),
+              flush=True)
+"""
+    real_popen = subprocess.Popen
+    processes = []
+
+    def tracking_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr("alberto.runtime.mcp.subprocess.Popen", tracking_popen)
+    client = MCPClient(config_path=tmp_path / "mcp.json")
+    client.add("failing", command=sys.executable, args=["-u", "-c", failing_server])
+
+    result = client.call("failing", "echo", {"value": 1})
+
+    assert result["ok"] is False
+    assert result["result"]["isError"] is True
+    assert processes, "the behavioral test must launch a real child process"
+    assert processes[0].poll() is not None, "MCP child process must be cleaned up after the call"

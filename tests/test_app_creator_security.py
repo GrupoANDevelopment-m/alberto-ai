@@ -262,3 +262,46 @@ def test_run_cleans_up_backend_when_frontend_install_fails(tmp_path, monkeypatch
     assert result["frontend_started"] is False
     assert "npm install failed" in result["frontend_error"]
     assert result["ok"] is False
+
+
+def test_app_creator_generated_backend_runs_real_health_and_count_routes(tmp_path):
+    import importlib.util
+    import sys
+    from fastapi.testclient import TestClient
+    from alberto.runtime.app_creator import AppCreator
+
+    creator = AppCreator(tmp_path / "apps")
+    created = creator.create(
+        "expense_tracker",
+        "Track expenses by category and prepare monthly reports",
+    )
+    assert created["ok"] is True
+
+    backend_file = Path(created["backend_path"]) / "main.py"
+    spec = importlib.util.spec_from_file_location("generated_app_creator_backend", backend_file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        with TestClient(module.app) as client:
+            health = client.get("/api/health")
+            assert health.status_code == 200
+            assert health.json() == {"ok": True, "name": "expense_tracker"}
+
+            initial = client.get("/api/count")
+            assert initial.status_code == 200
+            assert initial.json()["value"] == 0
+
+            incremented = client.post("/api/count/increment")
+            assert incremented.status_code == 200
+            assert incremented.json()["value"] == 1
+            assert client.get("/api/count").json()["value"] == 1
+
+            # The current AppCreator behavior is a generic counter scaffold,
+            # not an expense-domain implementation for the supplied request.
+            route_paths = {route.path for route in module.app.routes}
+            assert "/api/count/increment" in route_paths
+            assert "/api/expenses" not in route_paths
+    finally:
+        sys.modules.pop(spec.name, None)

@@ -487,3 +487,42 @@ def test_mimo_app_create_surfaces_planning_generation_and_review_failures(tmp_pa
     )
     assert result["ok"] is False
     assert "source review failed" in result["error"]
+
+
+def test_mimo_generated_backend_serves_its_declared_health_contract(tmp_path):
+    import importlib.util
+    import sys
+    from fastapi.testclient import TestClient
+
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            return generated_manifest()
+
+        def judge(self, candidate, *, criteria=None):
+            return {"verdict": "pass", "score": 0.95, "reason": "reviewed"}
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "health-contract", "spec": "A task manager with a health endpoint"},
+    )
+    assert result["ok"] is True
+
+    backend_file = Path(result["application"]["path"]) / "backend" / "main.py"
+    spec = importlib.util.spec_from_file_location("generated_mimo_backend_contract", backend_file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        with TestClient(module.app) as client:
+            response = client.get("/api/health")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+    finally:
+        sys.modules.pop(spec.name, None)

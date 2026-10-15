@@ -380,3 +380,114 @@ def test_app_tester_performs_real_local_http_load_and_reports_measurements(tmp_p
     assert result["concurrent"]["throughput_rps"] > 0
     assert result["sequential"]["p95_ms"] >= 0
     assert result["concurrent"]["p99_ms"] >= 0
+
+
+# ---------- MetaController: execution policy and dependency behavior ----------
+
+def test_meta_controller_refuses_host_skill_execution_without_opt_in(monkeypatch):
+    from types import SimpleNamespace
+    from alberto.runtime.meta_controller import MetaController, SubTask
+    from alberto.runtime import skill_engine
+
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", raising=False)
+    calls = []
+    sandbox = SimpleNamespace(run=lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(
+        skill_engine, "run_skill",
+        lambda *args, **kwargs: calls.append(("run_skill", args, kwargs)),
+    )
+    controller = object.__new__(MetaController)
+    controller.alberto = SimpleNamespace(sandbox=sandbox)
+
+    ok, output, error = controller._try_skill(
+        SubTask(id="st-1", description="execute a skill", skill="untrusted")
+    )
+
+    assert ok is False
+    assert output is None
+    assert "Docker isolation is required" in error
+    assert calls == []
+
+
+def test_meta_controller_executes_skill_through_docker_configured_sandbox(monkeypatch):
+    from types import SimpleNamespace
+    from alberto.runtime.meta_controller import MetaController, SubTask
+    from alberto.runtime import skill_engine
+
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", raising=False)
+    sandbox = SimpleNamespace(
+        isolation_level="docker-container",
+        _mode="docker",
+        run=lambda *args, **kwargs: None,
+    )
+    calls = []
+
+    def run_skill(name, args, *, sandbox, timeout):
+        calls.append((name, args, sandbox, timeout))
+        return {"ok": True, "stdout": "behavior verified"}
+
+    monkeypatch.setattr(skill_engine, "run_skill", run_skill)
+    controller = object.__new__(MetaController)
+    controller.alberto = SimpleNamespace(sandbox=sandbox)
+
+    result = controller._try_skill(
+        SubTask(id="st-1", description="execute safe skill", skill="safe-skill")
+    )
+
+    assert result == (True, "behavior verified", "")
+    assert calls == [("safe-skill", [], sandbox, 10)]
+
+
+def test_meta_controller_policy_denial_does_not_trigger_auto_recovery(monkeypatch):
+    from types import SimpleNamespace
+    from alberto.runtime.meta_controller import MetaController, Plan, SubTask
+
+    monkeypatch.delenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", raising=False)
+    sandbox = SimpleNamespace(run=lambda *args, **kwargs: None)
+    controller = object.__new__(MetaController)
+    controller.alberto = SimpleNamespace(sandbox=sandbox)
+    controller._on_event = None
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("policy denial must not trigger learning or recovery")
+
+    controller.skill_manager = SimpleNamespace(record_outcome=forbidden)
+    controller.researcher = SimpleNamespace(search=forbidden)
+    controller.learner = SimpleNamespace(
+        lesson_learned=forbidden, evolve_skill=forbidden, overcome_obstacle=forbidden
+    )
+    task = SubTask(id="st-1", description="run untrusted code", skill="untrusted")
+    plan = Plan(objective="run untrusted code", subtasks=[task])
+
+    controller._execute_subtask(plan, task)
+
+    assert task.status == "blocked"
+    assert task.attempts == 1
+    assert "skill execution refused:" in task.error
+
+
+def test_meta_controller_blocks_dependents_after_failed_prerequisite():
+    from alberto.runtime.meta_controller import MetaController, Plan, SubTask
+
+    controller = object.__new__(MetaController)
+    controller._on_event = None
+    controller._record_plan = lambda plan: None
+    attempted = []
+
+    def execute_one(plan, task):
+        attempted.append(task.id)
+        task.status = "failed"
+        task.error = "prerequisite failed"
+
+    controller._execute_subtask = execute_one
+    first = SubTask(id="st-1", description="first step", skill="first")
+    second = SubTask(
+        id="st-2", description="dependent step", skill="second", depends_on=["st-1"]
+    )
+    result = controller.execute(Plan(objective="ordered workflow", subtasks=[first, second]))
+
+    assert attempted == ["st-1"]
+    assert first.status == "failed"
+    assert second.status == "blocked"
+    assert "dependency not completed" in second.error
+    assert result.status == "failed"
