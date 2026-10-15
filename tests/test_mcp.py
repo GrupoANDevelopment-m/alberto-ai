@@ -105,7 +105,7 @@ def test_server_process_does_not_inherit_unrelated_environment_secrets(tmp_path,
         return FakeProcess()
 
     monkeypatch.setattr("alberto.runtime.mcp.subprocess.Popen", fake_popen)
-    monkeypatch.setattr(MCPClient, "_initialize_process", lambda proc: ["echo"])
+    monkeypatch.setattr(MCPClient, "_initialize_process", lambda cls, proc: ["echo"])
     assert client.connect("fake") is True
     assert "ALBERTO_PRIVATE_TEST_TOKEN" not in captured["env"]
     assert captured["env"]["MCP_EXPLICIT_SETTING"] == "allowed"

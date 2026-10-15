@@ -66,7 +66,7 @@ def test_create_skill_rejects_symlinked_target(tmp_path):
         link.symlink_to(outside, target_is_directory=True)
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"symlink creation unavailable: {exc}")
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError, match="symlink|inside the user skills directory"):
         learner.create_skill("linked_skill", description="desc", content="body")
     assert not (outside / "SKILL.md").exists()
 

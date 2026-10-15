@@ -191,3 +191,38 @@ class TestHermesWorkflow:
             assert "created via terminal" in r2
         finally:
             os.unlink(path)
+
+
+class TestHermesToolFailClosedContracts:
+    def test_core_tools_validate_required_inputs_and_sandbox(self, monkeypatch):
+        from alberto.engines import hermes_tools as tools
+
+        assert tools.tool_browser(None, {})["error"] == "missing 'url'"
+        unsafe = tools.tool_browser(None, {"url": "http://127.0.0.1"})
+        assert unsafe["ok"] is False
+        assert "blocked unsafe browser URL" in unsafe["error"]
+
+        assert tools.tool_code_execution(None, {})["error"] == "missing 'code'"
+        unsupported = tools.tool_code_execution(None, {"code": "print(1)", "language": "bash"})
+        assert unsupported["ok"] is False
+        assert "only Python" in unsupported["error"]
+        no_sandbox = tools.tool_code_execution(None, {"code": "print(1)"})
+        assert no_sandbox["ok"] is False
+        assert "configured sandbox" in no_sandbox["error"]
+
+        assert tools.tool_terminal(None, {})["error"] == "missing 'command'"
+        no_terminal_sandbox = tools.tool_terminal(None, {"command": "echo test"})
+        assert no_terminal_sandbox["ok"] is False
+        assert "configured sandbox" in no_terminal_sandbox["error"]
+
+        assert tools.tool_vision(None, {})["error"] == "need image_url or image_base64"
+        assert tools.tool_web_search(None, {})["error"] == "missing 'query'"
+        assert tools.tool_send_message(None, {})["error"] == "need platform, target, message"
+        assert tools.invoke_hermes_tool(None, "__missing__", {})["ok"] is False
+
+    def test_mcp_rejects_unknown_action_instead_of_reporting_success(self):
+        from alberto.engines.hermes_tools import tool_mcp
+
+        result = tool_mcp(None, {"action": "delete_everything"})
+        assert result["ok"] is False
+        assert "unsupported MCP action" in result["error"]

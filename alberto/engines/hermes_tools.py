@@ -245,6 +245,7 @@ def tool_mcp(alberto, args):
                     except Exception as e:
                         return {"ok": False, "error": str(e)}
         return {"ok": False, "error": f"MCP {server}/{tool_name} not available"}
+    return {"ok": False, "error": f"unsupported MCP action: {action}"}
 
 
 def tool_vision(alberto, args):

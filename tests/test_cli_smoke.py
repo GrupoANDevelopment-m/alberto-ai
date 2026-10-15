@@ -66,3 +66,61 @@ class TestCLIAllSubcommands:
         assert "chat" in out
         assert "status" in out
         assert "tools" in out
+
+
+class TestCLIHandlersInProcess:
+    def test_memory_handler_set_get_search_and_list(self, capsys):
+        from types import SimpleNamespace
+        from alberto.cli import cmd_memory
+
+        class FakeAlberto:
+            def __init__(self):
+                self.values = {"alpha": "value"}
+            def memory_set(self, key, value):
+                self.values[key] = value
+            def memory_get(self, key):
+                return self.values.get(key)
+            def memory_search(self, query):
+                return [{"key": "alpha", "value": self.values["alpha"]}]
+            def memory_list(self):
+                return [{"key": key, "value": value} for key, value in self.values.items()]
+
+        alberto = FakeAlberto()
+        assert cmd_memory(SimpleNamespace(action="set", key="beta", value="two"), alberto) == 0
+        assert "ok: beta" in capsys.readouterr().out
+        assert cmd_memory(SimpleNamespace(action="get", key="missing"), alberto) == 0
+        assert "(not found)" in capsys.readouterr().out
+        assert cmd_memory(SimpleNamespace(action="search", query="alpha"), alberto) == 0
+        assert "[alpha] value" in capsys.readouterr().out
+        assert cmd_memory(SimpleNamespace(action="list"), alberto) == 0
+        assert "[beta] two" in capsys.readouterr().out
+
+    def test_ask_handler_reports_response_and_tool_calls(self, capsys):
+        from types import SimpleNamespace
+        from alberto.cli import cmd_ask
+
+        class FakeAlberto:
+            def chat(self, prompt):
+                assert prompt == "hello"
+                return {
+                    "strategy": "solo",
+                    "response": "world",
+                    "tool_calls": [{"tool": "read", "result": "file content"}],
+                }
+
+        assert cmd_ask(SimpleNamespace(prompt="hello"), FakeAlberto()) == 0
+        output = capsys.readouterr().out
+        assert "[strategy] solo" in output
+        assert "[response] world" in output
+        assert "[tool] read: file content" in output
+
+    def test_model_test_handler_returns_nonzero_when_unconfigured(self, capsys):
+        from types import SimpleNamespace
+        from alberto.cli import cmd_model
+
+        class FakeAlberto:
+            def model_test(self, task):
+                return None
+
+        assert cmd_model(SimpleNamespace(action="test", task="chat"), FakeAlberto()) == 1
+        assert "no model configured" in capsys.readouterr().out
