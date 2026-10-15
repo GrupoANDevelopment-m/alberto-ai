@@ -284,3 +284,39 @@ class TestHermesToolFailClosedContracts:
         oversized = tool_code_execution(None, {"code": "x" * (256 * 1024 + 1)})
         assert oversized["ok"] is False
         assert "256 KiB" in oversized["error"]
+
+
+    @pytest.mark.parametrize("args", [
+        {"action": "invoke", "server": "", "tool": "read", "args": {}},
+        {"action": "invoke", "server": "filesystem", "tool": "", "args": {}},
+        {"action": "invoke", "server": "filesystem", "tool": "read", "args": []},
+        {"action": "invoke", "server": "x" * 201, "tool": "read", "args": {}},
+    ])
+    def test_mcp_invoke_rejects_malformed_arguments_before_dispatch(self, args, monkeypatch):
+        from alberto.engines import hermes_tools as tools
+
+        monkeypatch.setattr(
+            tools, "_try_import",
+            lambda _name: (_ for _ in ()).throw(AssertionError("must not dispatch invalid MCP arguments")),
+        )
+        result = tools.tool_mcp(None, args)
+        assert result["ok"] is False
+        assert "MCP invoke" in result["error"] or "MCP tool args" in result["error"]
+
+
+    def test_mcp_invoke_dispatches_valid_object_arguments(self, monkeypatch):
+        from types import SimpleNamespace
+        from alberto.engines import hermes_tools as tools
+
+        calls = []
+        def invoke(server, tool_name, **kwargs):
+            calls.append((server, tool_name, kwargs))
+            return {"content": "ok"}
+
+        monkeypatch.setattr(tools, "_try_import", lambda _name: SimpleNamespace(invoke=invoke))
+        result = tools.tool_mcp(None, {
+            "action": "invoke", "server": "filesystem", "tool": "read",
+            "args": {"path": "README.md"},
+        })
+        assert result == {"ok": True, "result": {"content": "ok"}}
+        assert calls == [("filesystem", "read", {"path": "README.md"})]
