@@ -77,7 +77,6 @@ def test_perf_reports_request_failures_as_failed_benchmark(tmp_path, monkeypatch
             pass
 
     monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
-    monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
     monkeypatch.setattr("alberto.runtime.tester.subprocess.Popen", lambda *a, **k: Process())
     monkeypatch.setattr("alberto.runtime.tester.time.sleep", lambda *_: None)
 
@@ -122,6 +121,7 @@ def test_perf_reports_successful_requests_and_percentiles(tmp_path, monkeypatch)
         def read(self):
             return b"ok"
 
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
     monkeypatch.setattr("alberto.runtime.tester.subprocess.Popen", lambda *a, **k: Process())
     monkeypatch.setattr("alberto.runtime.tester.time.sleep", lambda *_: None)
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Response())
