@@ -21,7 +21,7 @@ def test_live_agent_remembers_conversation_and_executes_real_tool(tmp_path, monk
     from alberto.sandbox import LocalSandbox
     from alberto.runtime.function_caller import run_tool_loop
 
-    model_id = os.environ.get("ALBERTO_LIVE_MODEL_ID", "meta/llama-3.3-70b-instruct")
+    model_id = os.environ.get("ALBERTO_LIVE_MODEL_ID", "nvidia/nemotron-3.5-lightning-30b-a3b")
     sandbox = LocalSandbox(base_dir=tmp_path / "alberto-live-sandbox", allow_net=True)
     agent = Alberto(sandbox=sandbox)
 
