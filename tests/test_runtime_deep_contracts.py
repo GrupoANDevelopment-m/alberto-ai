@@ -357,10 +357,10 @@ def test_app_tester_performs_real_local_http_load_and_reports_measurements(tmp_p
     # A deterministic local service fixture; the tester launches a real Uvicorn
     # process and issues actual HTTP requests against it.
     (backend / "main.py").write_text(
-        "from fastapi import FastAPI\\n"
-        "app = FastAPI()\\n"
-        "@app.get('/health')\\n"
-        "def health(): return {'status': 'ok', 'value': 42}\\n",
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "@app.get('/health')\n"
+        "def health(): return {'status': 'ok', 'value': 42}\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(HOST_APP_EXECUTION_OPT_IN, "1")
