@@ -1719,13 +1719,6 @@ def _mimo_worktree(alberto, args):
             requested_cwd = home / requested_cwd
         requested_cwd = requested_cwd.resolve()
         requested_cwd.relative_to(home)
-        target = Path(raw_path).expanduser()
-        if not target.is_absolute():
-            target = home / target
-        target = target.resolve()
-        target.relative_to(home)
-        if target == home or target.exists():
-            return {"ok": False, "error": "worktree path must be a new path inside sandbox home"}
         # Find the nearest Git root, but never walk above the sandbox boundary.
         repo = requested_cwd
         while repo != home and not (repo / ".git").exists():
@@ -1733,8 +1726,19 @@ def _mimo_worktree(alberto, args):
         if not (repo / ".git").exists():
             return {"ok": False, "error": "no git repository found inside sandbox home"}
         repo.relative_to(home)
+        # Git interprets relative worktree paths from its cwd (the repo root),
+        # not from sandbox.home(). Preserve that contract while checking the
+        # resolved destination against the sandbox boundary.
+        target = Path(raw_path).expanduser()
+        if not target.is_absolute():
+            target = requested_cwd / target
+        target = target.resolve()
+        target.relative_to(home)
+        if target == home or target.exists():
+            return {"ok": False, "error": "worktree path must be a new path inside sandbox home"}
         cwd_rel = repo.relative_to(home)
-        target_rel = target.relative_to(home)
+        target_rel = Path(os.path.relpath(target, repo))
+        parent_rel = target_rel.parent
         # Validate branch syntax using Git itself, inside the sandbox.
         check = sandbox.run(["git", "check-ref-format", "--branch", branch],
                             timeout=10, cwd=repo)
@@ -1743,8 +1747,8 @@ def _mimo_worktree(alberto, args):
                     "stderr": (check.stderr or "")[:500]}
         # Create the destination parent inside the sandbox; never mutate host
         # paths directly, even when the sandbox is a local/container adapter.
-        if target_rel.parent.parts:
-            mkdir_result = sandbox.run(["mkdir", "-p", str(target_rel.parent)],
+        if str(parent_rel) not in ("", "."):
+            mkdir_result = sandbox.run(["mkdir", "-p", str(parent_rel)],
                                        timeout=10, cwd=repo)
             if mkdir_result.returncode != 0:
                 return {"ok": False, "error": "could not create worktree parent inside sandbox",
@@ -1753,7 +1757,7 @@ def _mimo_worktree(alberto, args):
                              timeout=60, cwd=repo)
         return {"ok": result.returncode == 0, "stdout": result.stdout or "",
                 "stderr": result.stderr or "", "branch": branch,
-                "path": str(target_rel), "cwd": str(cwd_rel)}
+                "path": str(target), "cwd": str(cwd_rel)}
     except ValueError:
         return {"ok": False, "error": "worktree cwd or path escapes sandbox home"}
     except Exception as e:
