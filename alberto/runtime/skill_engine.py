@@ -320,7 +320,16 @@ def auto_invoke_skill(prompt: str) -> Optional[Dict[str, Any]]:
                 "description": rule["description"],
                 "matched_patterns": score,
             }
-    return best_match if best_match else None
+    if best_match is None:
+        return None
+    # Do not advertise a skill to the agent unless this checkout can resolve it.
+    # This prevents keyword matches from routing work into a nonexistent skill.
+    try:
+        if find_skill(best_match["skill"]) is None:
+            return None
+    except Exception:
+        return None
+    return best_match
 
 
 def main(argv: List[str]) -> int:
