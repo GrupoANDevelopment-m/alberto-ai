@@ -176,3 +176,119 @@ def test_patch_apply_changes_file_inside_sandbox_workspace(tmp_path):
 
     assert result["ok"] is True
     assert sandbox.read(Path("hello.txt")) == "new\n"
+
+
+def test_mimo_worktree_uses_sandbox_and_rejects_paths_outside_home(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import _mimo_worktree
+
+    home = tmp_path / "sandbox"
+    repo = home / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sandbox = RecordingSandbox(home)
+    result = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": "worktrees/session-1", "cwd": "repo", "branch": "session-1"},
+    )
+    assert result["ok"] is True
+    assert len(sandbox.calls) == 2
+    assert sandbox.calls[0][0] == ["git", "check-ref-format", "--branch", "session-1"]
+    assert sandbox.calls[1][0] == ["git", "worktree", "add", "-b", "session-1", "worktrees/session-1"]
+    assert all(call[2] == repo for call in sandbox.calls)
+
+    outside = tmp_path / "outside"
+    blocked_path = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": str(outside), "cwd": "repo", "branch": "session-2"},
+    )
+    blocked_cwd = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": "worktrees/session-2", "cwd": str(outside), "branch": "session-2"},
+    )
+    assert blocked_path["ok"] is False
+    assert blocked_cwd["ok"] is False
+    assert len(sandbox.calls) == 2
+
+
+def test_mimo_worktree_rejects_invalid_branch_and_requires_sandbox(tmp_path):
+    from alberto.engines.hermes_tools import _mimo_worktree
+
+    home = tmp_path / "sandbox"
+    repo = home / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sandbox = RecordingSandbox(home)
+    invalid = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": "worktrees/session", "cwd": "repo", "branch": "../escape"},
+    )
+    missing = _mimo_worktree(SimpleNamespace(), {"path": "worktrees/session"})
+    assert invalid["ok"] is False
+    assert "branch" in invalid["error"]
+    assert sandbox.calls == []
+    assert missing["ok"] is False
+    assert "sandbox is required" in missing["error"]
+
+
+def test_tts_rejects_output_outside_sandbox_before_provider_dispatch(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    home = tmp_path / "sandbox"
+    home.mkdir()
+    outside = tmp_path / "outside.mp3"
+    monkeypatch.setattr(
+        hermes_tools, "_try_import",
+        lambda _name: (_ for _ in ()).throw(AssertionError("provider must not be called for unsafe output")),
+    )
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=RecordingSandbox(home)),
+        {"text": "hello", "output_path": str(outside)},
+    )
+    assert result["ok"] is False
+    assert "escapes sandbox home" in result["error"]
+    assert not outside.exists()
+
+
+def test_tts_writes_and_verifies_regular_file_inside_sandbox(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    home = tmp_path / "sandbox"
+    home.mkdir()
+    sandbox = RecordingSandbox(home)
+    calls = []
+
+    def synthesize(*, text, provider, voice, output):
+        calls.append((text, provider, voice, Path(output)))
+        Path(output).write_bytes(b"real-audio-bytes")
+        return {"duration": 1.0}
+
+    monkeypatch.setattr(hermes_tools, "_try_import", lambda _name: SimpleNamespace(synthesize=synthesize))
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=sandbox),
+        {"text": "hello", "provider": "edge", "output_path": "audio/test.mp3"},
+    )
+    expected = home / "audio" / "test.mp3"
+    assert result["ok"] is True
+    assert Path(result["output"]) == expected
+    assert expected.read_bytes() == b"real-audio-bytes"
+    assert calls == [("hello", "edge", "", expected)]
+
+
+def test_tts_rejects_symlinked_output_parent_escaping_sandbox(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    home = tmp_path / "sandbox"
+    home.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (home / "audio").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        hermes_tools, "_try_import",
+        lambda _name: (_ for _ in ()).throw(AssertionError("provider must not be called for symlink escape")),
+    )
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=RecordingSandbox(home)),
+        {"text": "hello", "output_path": "audio/escape.mp3"},
+    )
+    assert result["ok"] is False
+    assert "escapes sandbox home" in result["error"]
+    assert not (outside / "escape.mp3").exists()
