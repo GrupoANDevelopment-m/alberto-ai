@@ -102,3 +102,36 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+
+  live-agent-conversation:
+    # Run manually only: never expose provider credentials to pull-request code.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -e . --no-deps
+      - name: Require configured live provider secret
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [ -z "$NVIDIA_API_KEY" ]; then
+            echo "::error::Configure the repository Actions secret NVIDIA_API_KEY before running live integration tests."
+            exit 1
+          fi
+      - name: Run real Alberto conversation and tool execution
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          ALBERTO_LIVE_TESTS: "1"
+          ALBERTO_LIVE_MODEL_ID: ${{ vars.ALBERTO_LIVE_MODEL_ID || 'meta/llama-3.3-70b-instruct' }}
+        run: python -m pytest -q -s tests/test_live_agent_conversation.py
