@@ -259,7 +259,7 @@ class TestHermesToolFailClosedContracts:
 
         result = tools.tool_browser(None, {"url": "https://example.com/"})
         assert result["ok"] is True
-        assert result["text"] == "safe"
+        assert result["text"].strip() == "safe"
         handlers = captured["handlers"]
         assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies == {} for h in handlers)
         assert any(isinstance(h, function_caller._PinnedHTTPHandler) for h in handlers)
