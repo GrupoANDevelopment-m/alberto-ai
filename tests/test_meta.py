@@ -248,3 +248,59 @@ class TestIntegration:
         from alberto.upstream_bridge import list_upstream_skills
         skills = list_upstream_skills()
         assert len(skills) >= 200, f"expected 200+ skills, got {len(skills)}"
+
+
+def test_plan_orders_subtasks_as_dependencies(alberto):
+    mc = MetaController(alberto)
+    plan = mc.plan_objective("research the topic; summarize the findings; prepare the report")
+    assert len(plan.subtasks) == 3
+    assert plan.subtasks[0].depends_on == []
+    assert plan.subtasks[1].depends_on == ["st-1"]
+    assert plan.subtasks[2].depends_on == ["st-2"]
+
+
+def test_execute_blocks_downstream_subtasks_after_dependency_failure(alberto, monkeypatch):
+    mc = MetaController(alberto)
+    from alberto.runtime.meta_controller import Plan, SubTask
+    first = SubTask(id="st-1", description="first", skill="first")
+    second = SubTask(id="st-2", description="second", skill="second", depends_on=["st-1"])
+    plan = Plan(objective="ordered", subtasks=[first, second])
+
+    def fail_first(_plan, task):
+        task.status = "failed"
+        task.error = "first task failed"
+
+    monkeypatch.setattr(mc, "_execute_subtask", fail_first)
+    result = mc.execute(plan)
+    assert result.status == "failed"
+    assert first.status == "failed"
+    assert second.status == "blocked"
+    assert "dependency not completed" in second.error
+
+
+def test_recovery_marks_subtask_finished_and_records_success(alberto, monkeypatch):
+    mc = MetaController(alberto)
+    from alberto.runtime.meta_controller import Plan, SubTask
+    task = SubTask(id="st-1", description="recover", skill="verified-skill", attempts=0)
+    plan = Plan(objective="recover", subtasks=[task])
+    outcomes = []
+    monkeypatch.setattr(
+        mc, "_try_skill",
+        lambda st, skill_override=None:
+            (False, None, "first attempt failed") if skill_override is None
+            else (True, "recovered output", ""),
+    )
+    monkeypatch.setattr(mc, "_detect_obstacle", lambda st: "transient tool failure")
+    monkeypatch.setattr(mc.researcher, "search", lambda *args, **kwargs:
+                        {"sources": {}, "total_hits": 1})
+    monkeypatch.setattr(mc.learner, "lesson_learned", lambda **kwargs: {})
+    monkeypatch.setattr(mc, "_try_evolve_skill", lambda *args: Path("/tmp/evolved-skill"))
+    monkeypatch.setattr(
+        mc.skill_manager, "record_outcome",
+        lambda name, *, success, duration=0.0: outcomes.append((name, success)),
+    )
+    mc._execute_subtask(plan, task)
+    assert task.status == "done"
+    assert task.finished_at is not None
+    assert task.error is None
+    assert ("verified-skill", True) in outcomes
