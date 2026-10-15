@@ -34,10 +34,16 @@ def test_read_tool_blocks_symlink_to_protected_file(read_tool, tmp_path):
 
 @pytest.mark.parametrize("read_tool", READ_TOOLS)
 def test_read_tool_still_allows_regular_workspace_file(read_tool, tmp_path):
+    from types import SimpleNamespace
+
     file_path = tmp_path / "notes.txt"
     file_path.write_text("normal content", encoding="utf-8")
+    alberto = (
+        SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
+        if read_tool is tool_file_read else None
+    )
 
-    output, is_error = read_tool(None, {"path": str(file_path)})
+    output, is_error = read_tool(alberto, {"path": str(file_path)})
 
     assert is_error is False
     assert "normal content" in output
@@ -78,10 +84,13 @@ def test_file_read_rejects_invalid_line_limits(tmp_path, max_lines):
 
 
 def test_file_read_streams_and_caps_very_large_single_line(tmp_path):
+    from types import SimpleNamespace
+
     file_path = tmp_path / "large.txt"
     file_path.write_text("x" * 250_000, encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
 
-    output, is_error = tool_file_read(None, {"path": str(file_path), "max_lines": 1})
+    output, is_error = tool_file_read(alberto, {"path": str(file_path), "max_lines": 1})
 
     assert is_error is False
     assert len(output) < 100_100
@@ -126,3 +135,20 @@ def test_mimo_read_rejects_files_over_size_limit_before_loading(tmp_path):
     output, is_error = tool_read(None, {"path": str(file_path)})
     assert is_error is True
     assert "10 MiB limit" in output
+
+
+def test_file_read_rejects_file_outside_configured_sandbox_even_under_tmp(tmp_path):
+    from types import SimpleNamespace
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be read", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: sandbox))
+
+    output, is_error = tool_file_read(alberto, {"path": str(outside)})
+
+    assert is_error is True
+    assert "inside configured sandbox" in output
+    assert "must not be read" not in output
+
