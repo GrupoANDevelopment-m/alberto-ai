@@ -185,3 +185,30 @@ def test_backend_smoke_refuses_host_execution_without_opt_in(tmp_path, monkeypat
     result = t._test_backend()
     assert result["ok"] is False
     assert result["phase"] == "backend_smoke"
+
+def test_perf_against_real_local_fastapi_backend(tmp_path, monkeypatch):
+    """Exercise the benchmark against a real Uvicorn process and HTTP responses."""
+    app_dir = tmp_path / "real-app"
+    backend = app_dir / "backend"
+    backend.mkdir(parents=True)
+    (backend / "main.py").write_text(
+        "from fastapi import FastAPI\\n"
+        "app = FastAPI()\\n"
+        "@app.get('/')\\n"
+        "def health():\\n"
+        "    return {'status': 'ok'}\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
+
+    result = AppTester(app_dir).perf("/", n_requests=5, concurrency=2)
+
+    assert result["ok"] is True, result
+    assert result["phase"] == "perf"
+    assert result["sequential"]["n"] == 5
+    assert result["sequential"]["errors"] == 0
+    assert result["concurrent"]["n"] == 5
+    assert result["concurrent"]["errors"] == 0
+    assert result["concurrent"]["duration_s"] > 0
+    assert result["concurrent"]["throughput_rps"] > 0
+    assert result["concurrent"]["p95_ms"] >= 0
