@@ -56,6 +56,8 @@ jobs:
               "tests/test_hermes_dispatch_contracts.py",
               "tests/test_cli_smoke.py",
               "tests/test_mimo_app_creation.py",
+              "tests/test_function_caller_hardening.py",
+              "tests/test_agent_core_hardening.py",
           )
           for test_path in required:
               count = workflow.count(test_path)
