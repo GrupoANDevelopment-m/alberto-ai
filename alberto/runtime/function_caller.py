@@ -182,10 +182,15 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
         sandbox = getattr(alberto, "sandbox", None)
         if sandbox is None or not callable(getattr(sandbox, "home", None)):
             return "BLOCKED by NemoClaw: configured sandbox is required for file reads", True
+        sandbox_root = Path(sandbox.home()).resolve()
         try:
-            p = safe_resolve_path(str(p), sandbox_root=Path(sandbox.home()))
-        except PathViolation as exc:
-            return f"BLOCKED by NemoClaw: {exc}", True
+            p = safe_resolve_path(str(p), sandbox_root=sandbox_root)
+            # safe_resolve_path intentionally permits general /tmp paths for
+            # other workflows; file_read must be stricter and stay inside the
+            # configured workspace even when the target is under /tmp.
+            p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: path must remain inside configured sandbox ({exc})", True
         if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: resolved path is protected", True
         if not p.exists():
