@@ -643,9 +643,13 @@ def tool_glob(alberto, args: Dict) -> Tuple[str, bool]:
 
 
 @register_tool("grep")
+GREP_MAX_FILES = 1000
+GREP_MAX_FILE_BYTES = 5 * 1024 * 1024
+GREP_MAX_TOTAL_BYTES = 50 * 1024 * 1024
+
+
 def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo grep.ts equivalent — search file contents for a regex pattern.
-    Args: pattern (str), path (str, default '.'), max_results (int, default 50)."""
+    """Search sandbox files with strict path and resource bounds."""
     import re as _re
     pattern = args.get("pattern", "")
     base = args.get("path", ".")
@@ -678,33 +682,54 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
             return f"path not found: {base}", True
         try:
             regex = _re.compile(pattern)
-        except _re.error as e:
-            return f"invalid regex: {e}", True
+        except _re.error as exc:
+            return f"invalid regex: {exc}", True
+
         matches = []
-        for f in base_p.rglob("*"):
-            if not f.is_file():
+        scanned_files = 0
+        scanned_bytes = 0
+        truncated = False
+        for file_path in base_p.rglob("*"):
+            if not file_path.is_file():
                 continue
-            try:
-                # Do not follow file symlinks outside the configured workspace.
-                resolved_file = f.resolve()
-                resolved_file.relative_to(sandbox_root)
-                if is_protected_path(str(f)) or is_protected_path(str(resolved_file)):
-                    continue
-                content = resolved_file.read_text(errors="replace")
-            except Exception:
-                continue
-            for i, line in enumerate(content.splitlines(), 1):
-                if regex.search(line):
-                    matches.append(f"{f}:{i}: {line[:200]}")
-                    if len(matches) >= max_results:
-                        break
-            if len(matches) >= max_results:
+            scanned_files += 1
+            if scanned_files > GREP_MAX_FILES:
+                truncated = True
                 break
-        if not matches:
+            try:
+                resolved_file = file_path.resolve()
+                resolved_file.relative_to(sandbox_root)
+                if is_protected_path(str(file_path)) or is_protected_path(str(resolved_file)):
+                    continue
+                size = resolved_file.stat().st_size
+                if size > GREP_MAX_FILE_BYTES:
+                    continue
+                with resolved_file.open("r", encoding="utf-8", errors="replace") as stream:
+                    for line_number, line in enumerate(stream, 1):
+                        scanned_bytes += len(line.encode("utf-8", errors="replace"))
+                        if scanned_bytes > GREP_MAX_TOTAL_BYTES:
+                            truncated = True
+                            break
+                        if regex.search(line):
+                            matches.append(f"{file_path}:{line_number}: {line.rstrip()[:200]}")
+                            if len(matches) >= max_results:
+                                break
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if len(matches) >= max_results or truncated:
+                break
+
+        output = "\\n".join(matches)
+        if truncated:
+            output = (output + "\\n" if output else "") + (
+                f"[search truncated: resource limit reached; scanned at most "
+                f"{GREP_MAX_FILES} files / {GREP_MAX_TOTAL_BYTES} bytes]"
+            )
+        if not matches and not truncated:
             return f"no matches for /{pattern}/ in {base}", False
-        return "\n".join(matches), False
-    except Exception as e:
-        return f"error: {e}", True
+        return output, False
+    except Exception as exc:
+        return f"error: {exc}", True
 
 
 def _validate_public_web_url(url: str):
