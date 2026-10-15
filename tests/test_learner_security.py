@@ -19,7 +19,7 @@ def make_learner(tmp_path):
 
 @pytest.mark.parametrize("name", [
     "../escape", "../../tmp/escape", "/tmp/escape", "has space", "UPPER", ".", "",
-    "a" * 65, "name\\\nested", "name/child",
+    "a" * 65, r"name\\nested", "name/child",
 ])
 def test_create_skill_rejects_invalid_or_traversal_names(tmp_path, name):
     learner = make_learner(tmp_path)
