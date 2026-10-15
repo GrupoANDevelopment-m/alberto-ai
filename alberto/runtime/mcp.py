@@ -127,19 +127,21 @@ class MCPClient:
             cfg = d / "mcp.json"
             if cfg.exists():
                 try:
-                    data = json.loads(cfg.read_text())
+                    data = json.loads(cfg.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        continue
                     for name, srv_cfg in data.items():
-                        if name not in self.servers:
+                        if name not in self.servers and self._valid_server_config(name, srv_cfg):
                             self.servers[name] = MCPServer(
                                 name=name,
                                 transport=srv_cfg.get("transport", "stdio"),
                                 command=srv_cfg.get("command"),
-                                args=srv_cfg.get("args", []),
-                                env=srv_cfg.get("env", {}),
+                                args=list(srv_cfg.get("args", [])),
+                                env=dict(srv_cfg.get("env", {})),
                                 url=srv_cfg.get("url"),
                             )
-                except Exception:
-                    pass
+                except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                    continue
 
     def add(self, name: str, *, command: Optional[str] = None, args: Optional[List[str]] = None,
             env: Optional[Dict[str, str]] = None, url: Optional[str] = None,
