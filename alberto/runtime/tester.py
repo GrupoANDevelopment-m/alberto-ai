@@ -25,6 +25,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# Keep CLI-driven benchmarks bounded so a typo or hostile input cannot allocate
+# an unbounded number of futures or overload the machine running the tester.
+MAX_BENCHMARK_REQUESTS = 1000
+MAX_BENCHMARK_CONCURRENCY = 64
+
+
 class AppTester:
     def __init__(self, app_dir: Path):
         self.app_dir = Path(app_dir).resolve()
@@ -57,10 +63,10 @@ class AppTester:
         """Performance benchmark. Starts backend, hits endpoint N times concurrent."""
         if not self.backend.exists():
             return {"ok": False, "error": "no backend dir"}
-        if not isinstance(n_requests, int) or isinstance(n_requests, bool) or n_requests < 1:
-            return {"ok": False, "error": "n_requests must be a positive integer"}
-        if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
-            return {"ok": False, "error": "concurrency must be a positive integer"}
+        if not isinstance(n_requests, int) or isinstance(n_requests, bool) or not 1 <= n_requests <= MAX_BENCHMARK_REQUESTS:
+            return {"ok": False, "error": f"n_requests must be an integer between 1 and {MAX_BENCHMARK_REQUESTS}"}
+        if not isinstance(concurrency, int) or isinstance(concurrency, bool) or not 1 <= concurrency <= MAX_BENCHMARK_CONCURRENCY:
+            return {"ok": False, "error": f"concurrency must be an integer between 1 and {MAX_BENCHMARK_CONCURRENCY}"}
         if not isinstance(endpoint, str) or not endpoint.startswith("/") or endpoint.startswith("//"):
             return {"ok": False, "error": "endpoint must be a local absolute path beginning with one slash"}
         # Start backend
