@@ -533,14 +533,22 @@ def tool_homeassistant(alberto, args):
 
 
 def _resolve_sandbox_output_path(sandbox, raw_output: str = "") -> Path:
-    """Resolve a TTS destination strictly inside the configured sandbox home."""
+    """Resolve a TTS destination inside a sandbox home usable by the host TTS provider."""
     if sandbox is None or not callable(getattr(sandbox, "home", None)):
         raise ValueError("a configured sandbox is required for TTS output")
+    # The current upstream TTS provider executes in this Python process and
+    # writes to a host path. A Docker-only /tmp path refers to a different
+    # filesystem, so pretending it is isolated would be incorrect.
+    if getattr(sandbox, "isolation_level", "") == "docker-container":
+        raise ValueError("TTS provider is not sandbox-executed; Docker mode is unsupported until binary output is transferred through the sandbox API")
     home = Path(sandbox.home()).expanduser().resolve()
-    voice_root = (home / ".hermes" / "voice").resolve()
+    voice_root = home / ".hermes" / "voice"
     candidate = Path(raw_output).expanduser() if raw_output else voice_root / f"{int(time.time() * 1000)}.mp3"
     if not candidate.is_absolute():
         candidate = home / candidate
+    # Reject an output symlink before resolve() follows it.
+    if candidate.is_symlink():
+        raise ValueError("TTS output must not be a symbolic link")
     # Resolve existing symlinks in every existing path component before mkdir.
     resolved = candidate.resolve()
     try:
@@ -555,8 +563,6 @@ def _resolve_sandbox_output_path(sandbox, raw_output: str = "") -> Path:
         resolved_parent.relative_to(home)
     except ValueError:
         raise ValueError("TTS output parent escapes sandbox home") from None
-    if resolved.exists() and resolved.is_symlink():
-        raise ValueError("TTS output must not be a symbolic link")
     return resolved_parent / resolved.name
 
 
