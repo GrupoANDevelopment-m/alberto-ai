@@ -173,15 +173,20 @@ def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "invalid max_lines: expected an integer from 1 to 2000", True
     try:
         p = Path(path).expanduser()
-        # Apply the same sensitive-path policy to reads as to writes. Check both
-        # the supplied path and its resolved target so symlinks cannot bypass it.
-        from .nemoclaw_real import is_protected_path
+        # Reads must use the same sandbox containment policy as writes; a
+        # protected-path blacklist alone does not prevent arbitrary host reads.
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
         if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: protected file path", True
-        resolved = p.resolve()
-        if is_protected_path(str(resolved)):
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file reads", True
+        try:
+            p = safe_resolve_path(str(p), sandbox_root=Path(sandbox.home()))
+        except PathViolation as exc:
+            return f"BLOCKED by NemoClaw: {exc}", True
+        if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: resolved path is protected", True
-        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         # Stream only the requested prefix instead of loading an arbitrarily
