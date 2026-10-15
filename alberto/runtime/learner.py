@@ -58,43 +58,103 @@ class Learner:
         self.profile_path.write_text(json.dumps(self.profile, indent=2, ensure_ascii=False))
 
     # ====== Skill creation ======
+    @staticmethod
+    def _validate_skill_name(name: str) -> str:
+        """Accept only portable skill slugs; never accept path components."""
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
+            raise ValueError("invalid skill name: use 1-64 lowercase letters, digits, '_' or '-'")
+        return name
+
+    @staticmethod
+    def _yaml_scalar(value: str) -> str:
+        # JSON quoted strings are valid YAML scalars and prevent frontmatter injection.
+        return json.dumps(value, ensure_ascii=False)
+
     def create_skill(self, name: str, *, description: str, content: str,
                      category: str = "user", tags: Optional[List[str]] = None,
                      code_blocks: Optional[List[Dict]] = None,
                      author: str = "alberto") -> Path:
-        """Create a new SKILL.md and supporting files.
+        """Create a new SKILL.md with validated metadata and confined output path."""
+        name = self._validate_skill_name(name)
+        for field, value, limit in (
+            ("description", description, 12000),
+            ("content", content, 50000),
+            ("category", category, 80),
+            ("author", author, 120),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                raise ValueError(f"invalid {field}: expected non-empty text up to {limit} characters")
+        if tags is not None:
+            if not isinstance(tags, list) or len(tags) > 30 or any(
+                not isinstance(tag, str) or not tag.strip() or len(tag) > 80 for tag in tags
+            ):
+                raise ValueError("invalid tags: expected up to 30 non-empty strings of at most 80 characters")
+        if code_blocks is not None:
+            if not isinstance(code_blocks, list) or len(code_blocks) > 20:
+                raise ValueError("invalid code_blocks: expected a list of at most 20 blocks")
+            total_code_chars = 0
+            for block in code_blocks:
+                if not isinstance(block, dict) or not isinstance(block.get("code"), str):
+                    raise ValueError("invalid code block: each block requires string code")
+                lang = block.get("lang", "bash")
+                if not isinstance(lang, str) or not re.fullmatch(r"[A-Za-z0-9_+-]{1,24}", lang):
+                    raise ValueError("invalid code block language")
+                total_code_chars += len(block["code"])
+            if total_code_chars > 100000:
+                raise ValueError("invalid code_blocks: combined code exceeds 100000 characters")
 
-        code_blocks: optional list of {lang, code} dicts to include in markdown
-        """
-        target = self.user_skills_dir / name
+        base = self.user_skills_dir.resolve()
+        target = base / name
+        # Resolve before writing and reject an existing symlinked destination.
+        try:
+            target.resolve(strict=False).relative_to(base)
+        except ValueError as exc:
+            raise ValueError("skill output path must remain inside the user skills directory") from exc
+        if target.is_symlink():
+            raise ValueError("skill output path may not be a symlink")
         target.mkdir(parents=True, exist_ok=True)
-        # Build SKILL.md
-        tags_str = ", ".join(tags) if tags else "user-created, alberto"
-        body = f"""---
-name: {name}
-description: >
-  {description}
-version: 0.1.0
-author: {author}
-license: Apache-2.0
-metadata:
-  alberto:
-    category: {category}
-    tags: [{tags_str}]
-    created_by: learner
----
+        resolved_target = target.resolve()
+        try:
+            resolved_target.relative_to(base)
+        except ValueError as exc:
+            raise ValueError("skill output path must remain inside the user skills directory") from exc
 
-# {name}
-
-{description}
-
-{content}
-"""
+        safe_tags = tags if tags else ["user-created", "alberto"]
+        frontmatter = {
+            "name": name,
+            "description": description,
+            "version": "0.1.0",
+            "author": author,
+            "license": "Apache-2.0",
+            "metadata": {
+                "alberto": {
+                    "category": category,
+                    "tags": safe_tags,
+                    "created_by": "learner",
+                }
+            },
+        }
+        # Emit quoted scalar values so user text cannot break YAML structure.
+        body = (
+            "---\\n"
+            f"name: {self._yaml_scalar(frontmatter['name'])}\\n"
+            f"description: {self._yaml_scalar(frontmatter['description'])}\\n"
+            f"version: {self._yaml_scalar(frontmatter['version'])}\\n"
+            f"author: {self._yaml_scalar(frontmatter['author'])}\\n"
+            f"license: {self._yaml_scalar(frontmatter['license'])}\\n"
+            "metadata:\\n"
+            "  alberto:\\n"
+            f"    category: {self._yaml_scalar(category)}\\n"
+            f"    tags: {json.dumps(safe_tags, ensure_ascii=False)}\\n"
+            "    created_by: learner\\n"
+            "---\\n\\n"
+            f"# {name}\\n\\n{description}\\n\\n{content}\\n"
+        )
         if code_blocks:
-            for b in code_blocks:
-                body += f"\n```{b.get('lang', 'bash')}\n{b['code']}\n```\n"
-        skill_md = target / "SKILL.md"
-        skill_md.write_text(body)
+            for block in code_blocks:
+                body += f"\\n\u0060\u0060\u0060{block.get('lang', 'bash')}\\n{block['code']}\\n\u0060\u0060\u0060\\n"
+        skill_md = resolved_target / "SKILL.md"
+        skill_md.write_text(body, encoding="utf-8")
         return skill_md
 
     def evolve_skill(self, name: str, *, improvements: str,
@@ -105,10 +165,18 @@ metadata:
         Reads the existing SKILL.md, appends a "## Evolution" section,
         bumps version, and re-writes.
         """
+        name = self._validate_skill_name(name)
         from alberto.runtime.skill_engine import find_skill
         path = find_skill(name)
         if not path:
             return None
+        base = self.user_skills_dir.resolve()
+        try:
+            path.resolve().relative_to(base)
+        except ValueError:
+            raise ValueError("only user-created skills may be evolved")
+        if path.is_symlink() or path.resolve().is_symlink():
+            raise ValueError("symlinked skills may not be evolved")
         content = path.read_text(encoding="utf-8", errors="replace")
         # Bump version
         m = re.search(r"version:\s*(\d+\.\d+\.\d+)", content)
