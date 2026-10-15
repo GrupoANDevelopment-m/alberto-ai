@@ -52,23 +52,59 @@ class MCPClient:
         self._load_config()
         self._auto_discover()
 
+    @staticmethod
+    def _valid_server_config(name: Any, cfg: Any) -> bool:
+        """Validate persisted MCP entries before they enter the runtime registry."""
+        if not isinstance(name, str) or not name.strip() or not isinstance(cfg, dict):
+            return False
+        transport = cfg.get("transport", "stdio")
+        command = cfg.get("command")
+        args = cfg.get("args", [])
+        env = cfg.get("env", {})
+        url = cfg.get("url")
+        if transport not in {"stdio", "http", "sse"}:
+            return False
+        if command is not None and (not isinstance(command, str) or not command.strip()):
+            return False
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            return False
+        if not isinstance(env, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in env.items()
+        ):
+            return False
+        if url is not None and not isinstance(url, str):
+            return False
+        if transport == "stdio" and not command:
+            return False
+        if transport in {"http", "sse"} and not url:
+            return False
+        return True
+
     def _load_config(self) -> None:
         if not self.config_path.exists():
             self.config_path.write_text("{}")
             return
         try:
-            data = json.loads(self.config_path.read_text())
-            for name, cfg in data.items():
-                self.servers[name] = MCPServer(
-                    name=name,
-                    transport=cfg.get("transport", "stdio"),
-                    command=cfg.get("command"),
-                    args=cfg.get("args", []),
-                    env=cfg.get("env", {}),
-                    url=cfg.get("url"),
-                )
-        except Exception as e:
+            data = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as e:
             print(f"[mcp] config load error: {e}", file=sys.stderr)
+            return
+        if not isinstance(data, dict):
+            print("[mcp] config load error: root must be a JSON object", file=sys.stderr)
+            return
+        for name, cfg in data.items():
+            if not self._valid_server_config(name, cfg):
+                print(f"[mcp] ignoring invalid server config: {str(name)[:100]}", file=sys.stderr)
+                continue
+            self.servers[name] = MCPServer(
+                name=name,
+                transport=cfg.get("transport", "stdio"),
+                command=cfg.get("command"),
+                args=list(cfg.get("args", [])),
+                env=dict(cfg.get("env", {})),
+                url=cfg.get("url"),
+            )
 
     def _save_config(self) -> None:
         data = {}
@@ -105,12 +141,19 @@ class MCPClient:
                 except Exception:
                     pass
 
-    def add(self, name: str, *, command: str, args: Optional[List[str]] = None,
+    def add(self, name: str, *, command: Optional[str] = None, args: Optional[List[str]] = None,
             env: Optional[Dict[str, str]] = None, url: Optional[str] = None,
             transport: str = "stdio") -> None:
+        cfg = {
+            "transport": transport, "command": command,
+            "args": [] if args is None else args,
+            "env": {} if env is None else env, "url": url,
+        }
+        if not self._valid_server_config(name, cfg):
+            raise ValueError("invalid MCP server configuration")
         self.servers[name] = MCPServer(
             name=name, transport=transport, command=command,
-            args=args or [], env=env or {}, url=url,
+            args=list(cfg["args"]), env=dict(cfg["env"]), url=url,
         )
         self._save_config()
 
