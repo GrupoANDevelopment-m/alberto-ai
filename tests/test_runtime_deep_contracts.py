@@ -266,3 +266,117 @@ def test_crewai_non_rate_limit_failure_fails_fast(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert "crew run failed: invalid task payload" in result["error"]
     assert len(crews) == 1
+
+
+# ---------- Model router: real HTTP protocol and fallback against a local server ----------
+
+def test_model_router_falls_back_after_real_http_error_and_sends_valid_payload(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from alberto.model_router import ModelConfig, ModelRouter, ModelSpec
+
+    received = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append((body, self.headers.get("Authorization"), self.path))
+            if body["model"] == "primary":
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b"temporarily unavailable")
+                return
+            response = {"choices": [{"message": {"role": "assistant", "content": "actual local HTTP response"}}]}
+            raw = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}"
+        monkeypatch.setenv("PRIMARY_KEY", "primary-secret")
+        monkeypatch.setenv("FALLBACK_KEY", "fallback-secret")
+        primary = ModelSpec("local-primary", "primary", url, "PRIMARY_KEY")
+        fallback = ModelSpec("local-fallback", "fallback", url + "/v1/", "FALLBACK_KEY",
+                             options={"reasoning_effort": "low"})
+        router = ModelRouter(ModelConfig(tasks={"reasoning": primary}, fallback_chain=[fallback]))
+
+        result = router.invoke(
+            "reasoning", [{"role": "user", "content": "calculate 6 * 7"}],
+            max_tokens=77, temperature=0.2,
+            tools=[{"type": "function", "function": {"name": "calc", "parameters": {"type": "object"}}}],
+            tool_choice="auto",
+        )
+
+        assert result["choices"][0]["message"]["content"] == "actual local HTTP response"
+        assert len(received) == 2
+        assert received[0][0]["model"] == "primary"
+        assert received[1][0]["model"] == "fallback"
+        assert received[1][0]["reasoning_effort"] == "low"
+        assert received[1][0]["max_tokens"] == 77
+        assert received[1][0]["temperature"] == 0.2
+        assert received[1][0]["tool_choice"] == "auto"
+        assert received[1][0]["tools"][0]["function"]["name"] == "calc"
+        assert received[0][1] == "Bearer primary-secret"
+        assert received[1][1] == "Bearer fallback-secret"
+        assert all(path == "/v1/chat/completions" for _, _, path in received)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_model_router_fails_closed_when_no_credential_or_model_is_configured(monkeypatch):
+    from alberto.model_router import ModelConfig, ModelRouter, ModelSpec
+
+    monkeypatch.delenv("NO_SUCH_CREDENTIAL", raising=False)
+    router = ModelRouter(ModelConfig(tasks={
+        "reasoning": ModelSpec("provider", "model", "http://127.0.0.1:1", "NO_SUCH_CREDENTIAL")
+    }))
+    with pytest.raises(RuntimeError, match="credential env"):
+        router.invoke("reasoning", [{"role": "user", "content": "hello"}])
+
+    with pytest.raises(RuntimeError, match="No model configured"):
+        ModelRouter(ModelConfig(tasks={})).invoke("unknown", [])
+
+
+# ---------- AppTester: actual local HTTP benchmark, not a process/import smoke test ----------
+
+def test_app_tester_performs_real_local_http_load_and_reports_measurements(tmp_path, monkeypatch):
+    from alberto.runtime.tester import AppTester, HOST_APP_EXECUTION_OPT_IN
+
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    # A deterministic local service fixture; the tester launches a real Uvicorn
+    # process and issues actual HTTP requests against it.
+    (backend / "main.py").write_text(
+        "from fastapi import FastAPI\\n"
+        "app = FastAPI()\\n"
+        "@app.get('/health')\\n"
+        "def health(): return {'status': 'ok', 'value': 42}\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(HOST_APP_EXECUTION_OPT_IN, "1")
+    tester = AppTester(tmp_path)
+
+    result = tester.perf("/health", n_requests=5, concurrency=2)
+
+    assert result["phase"] == "perf"
+    assert result["endpoint"] == "/health"
+    assert result["n_requests"] == 5
+    assert result["concurrency"] == 2
+    assert result["ok"] is True
+    assert result["sequential"]["n"] == 5
+    assert result["sequential"]["errors"] == 0
+    assert result["concurrent"]["n"] == 5
+    assert result["concurrent"]["errors"] == 0
+    assert result["concurrent"]["throughput_rps"] > 0
+    assert result["sequential"]["p95_ms"] >= 0
+    assert result["concurrent"]["p99_ms"] >= 0
