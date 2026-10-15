@@ -70,3 +70,49 @@ def test_redaction_preserves_distinct_masks_for_distinct_secrets():
         "OpenAI API key",
         "GitHub token",
     }
+
+
+def test_file_read_requires_sandbox_and_allows_in_sandbox_file(tmp_path):
+    from types import SimpleNamespace
+    from alberto.runtime.function_caller import tool_file_read
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    target = sandbox / "notes.txt"
+    target.write_text("safe content", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: str(sandbox)))
+
+    output, is_error = tool_file_read(alberto, {"path": "notes.txt"})
+
+    assert is_error is False
+    assert output == "safe content"
+
+
+def test_file_read_rejects_relative_path_escape(tmp_path):
+    from types import SimpleNamespace
+    from alberto.runtime.function_caller import tool_file_read
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be read", encoding="utf-8")
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: str(sandbox)))
+
+    output, is_error = tool_file_read(alberto, {"path": "../outside.txt"})
+
+    assert is_error is True
+    assert "BLOCKED by NemoClaw" in output
+    assert "must not be read" not in output
+
+
+def test_file_read_fails_closed_without_configured_sandbox(tmp_path):
+    from types import SimpleNamespace
+    from alberto.runtime.function_caller import tool_file_read
+
+    target = tmp_path / "readme.txt"
+    target.write_text("content", encoding="utf-8")
+
+    output, is_error = tool_file_read(SimpleNamespace(), {"path": str(target)})
+
+    assert is_error is True
+    assert "configured sandbox is required" in output
