@@ -38,10 +38,8 @@ def test_read_tool_still_allows_regular_workspace_file(read_tool, tmp_path):
 
     file_path = tmp_path / "notes.txt"
     file_path.write_text("normal content", encoding="utf-8")
-    alberto = (
-        SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
-        if read_tool is tool_file_read else None
-    )
+    # Both read tools require the same explicitly configured workspace sandbox.
+    alberto = SimpleNamespace(sandbox=SimpleNamespace(home=lambda: tmp_path))
 
     output, is_error = read_tool(alberto, {"path": str(file_path)})
 
