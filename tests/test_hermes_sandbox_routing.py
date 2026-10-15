@@ -190,9 +190,10 @@ def test_mimo_worktree_uses_sandbox_and_rejects_paths_outside_home(tmp_path, mon
         {"path": "worktrees/session-1", "cwd": "repo", "branch": "session-1"},
     )
     assert result["ok"] is True
-    assert len(sandbox.calls) == 2
+    assert len(sandbox.calls) == 3
     assert sandbox.calls[0][0] == ["git", "check-ref-format", "--branch", "session-1"]
-    assert sandbox.calls[1][0] == ["git", "worktree", "add", "-b", "session-1", "worktrees/session-1"]
+    assert sandbox.calls[1][0] == ["mkdir", "-p", "worktrees"]
+    assert sandbox.calls[2][0] == ["git", "worktree", "add", "-b", "session-1", "worktrees/session-1"]
     assert all(call[2] == repo for call in sandbox.calls)
 
     outside = tmp_path / "outside"
@@ -206,7 +207,7 @@ def test_mimo_worktree_uses_sandbox_and_rejects_paths_outside_home(tmp_path, mon
     )
     assert blocked_path["ok"] is False
     assert blocked_cwd["ok"] is False
-    assert len(sandbox.calls) == 2
+    assert len(sandbox.calls) == 3
 
 
 def test_mimo_worktree_rejects_invalid_branch_and_requires_sandbox(tmp_path):
