@@ -24,10 +24,34 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+REPOSITORY_ROOT = Path(__file__).parent.parent.parent
+USER_SKILLS_DIR = REPOSITORY_ROOT / "skills" / "user"
 SKILL_DIRS = [
-    Path(__file__).parent.parent.parent / "skills",
-    Path(__file__).parent.parent.parent / "upstream" / "hermes" / "skills",
+    REPOSITORY_ROOT / "skills",
+    REPOSITORY_ROOT / "upstream" / "hermes" / "skills",
 ]
+
+
+def _user_skill_approval_error(path: Path) -> Optional[str]:
+    """Require explicit operator approval before executing learner-generated skills."""
+    user_dir = USER_SKILLS_DIR
+    try:
+        path.absolute().relative_to(user_dir.absolute())
+    except ValueError:
+        return None
+    if user_dir.is_symlink() or path.is_symlink():
+        return "untrusted user skill refused: symlinked skill paths are not allowed"
+    try:
+        path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return "untrusted user skill refused: skill path escapes the user skills directory"
+    approved = os.environ.get("ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION", "").strip().lower()
+    if approved not in {"1", "true", "yes", "on"}:
+        return (
+            "untrusted user skill refused: explicit operator approval is required; "
+            "set ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION=1 only after reviewing its source"
+        )
+    return None
 
 
 def find_skill(name: str) -> Optional[Path]:
@@ -105,6 +129,9 @@ def show_skill(name: str) -> Dict[str, Any]:
     path = find_skill(name)
     if not path:
         return {"ok": False, "error": f"skill '{name}' not found"}
+    approval_error = _user_skill_approval_error(path)
+    if approval_error:
+        return {"ok": False, "error": approval_error}
     content = path.read_text(encoding="utf-8", errors="replace")
     blocks = extract_code_blocks(content)
     # Frontmatter
