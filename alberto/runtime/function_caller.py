@@ -2263,11 +2263,13 @@ def run_tool_loop(alberto, messages: List[Dict], *,
             raw_args = fn.get("arguments", "{}")
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except (TypeError, ValueError):
-                args = {}
-            if not isinstance(args, dict):
-                args = {}
-            output, is_error = execute_tool(alberto, name, args)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                output, is_error = (f"invalid tool arguments JSON: {exc}", True)
+            else:
+                if not isinstance(args, dict):
+                    output, is_error = ("invalid tool arguments: expected a JSON object", True)
+                else:
+                    output, is_error = execute_tool(alberto, name, args)
             history.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
