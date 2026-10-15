@@ -360,3 +360,49 @@ def test_tts_rejects_output_symlink_even_when_target_is_inside_sandbox(tmp_path,
     assert result["ok"] is False
     assert "symbolic link" in result["error"]
     assert real_file.read_bytes() == b"existing"
+
+
+def test_mimo_worktree_stops_when_sandbox_cannot_create_parent(tmp_path):
+    from alberto.engines.hermes_tools import _mimo_worktree
+
+    home = tmp_path / "sandbox"
+    repo = home / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    class FailingMkdirSandbox(RecordingSandbox):
+        def run(self, command, *, timeout=60, cwd=None):
+            self.calls.append((command, timeout, cwd))
+            if command[:2] == ["mkdir", "-p"]:
+                return subprocess.CompletedProcess(command, 1, "", "permission denied")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+    sandbox = FailingMkdirSandbox(home)
+    result = _mimo_worktree(
+        SimpleNamespace(sandbox=sandbox),
+        {"path": "worktrees/session", "cwd": "repo", "branch": "session"},
+    )
+
+    assert result["ok"] is False
+    assert "could not create worktree parent" in result["error"]
+    assert len(sandbox.calls) == 2
+    assert sandbox.calls[-1][0][:2] == ["mkdir", "-p"]
+
+
+def test_tts_provider_must_create_output_file(tmp_path, monkeypatch):
+    from alberto.engines.hermes_tools import tool_voice_tts
+
+    home = tmp_path / "sandbox"
+    home.mkdir()
+    monkeypatch.setattr(
+        hermes_tools, "_try_import",
+        lambda _name: SimpleNamespace(synthesize=lambda **_kwargs: {"duration": 1.0}),
+    )
+
+    result = tool_voice_tts(
+        SimpleNamespace(sandbox=RecordingSandbox(home)),
+        {"text": "hello", "provider": "edge", "output_path": "audio/missing.mp3"},
+    )
+
+    assert result["ok"] is False
+    assert "without creating a regular output file" in result["error"]
+    assert not (home / "audio" / "missing.mp3").exists()
