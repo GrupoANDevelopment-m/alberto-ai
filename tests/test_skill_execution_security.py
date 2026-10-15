@@ -311,5 +311,42 @@ def test_main_cli_run_all_delegates_to_sandbox_hardened_engine(monkeypatch, caps
 
     assert result == 1
     assert calls == [[
-        "run-all", "sample", "argument with spaces", "--flag", "--timeout", "17"
+        "run-all", "--timeout", "17", "--", "sample", "argument with spaces", "--flag"
     ]]
+
+
+def test_skill_cli_run_all_requires_approval_for_generated_user_skill(tmp_path, monkeypatch, capsys):
+    user_dir = tmp_path / "skills" / "user"
+    skill_path = write_skill(
+        user_dir,
+        "generated-run-all",
+        code_block("bash", "echo must-not-run"),
+    )
+    monkeypatch.setattr(skill_engine, "USER_SKILLS_DIR", user_dir)
+    monkeypatch.setattr(skill_engine, "find_skill", lambda _name: skill_path)
+    monkeypatch.delenv("ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION", raising=False)
+    monkeypatch.setenv("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "1")
+    monkeypatch.setenv("ALBERTO_SANDBOX_KIND", "nemoclaw")
+
+    class FakeSandbox:
+        isolation_level = "docker-container"
+        _mode = "docker"
+
+        def __init__(self):
+            self.calls = []
+
+        def home(self):
+            return tmp_path
+
+        def run(self, command, *, timeout=60, cwd=None):
+            self.calls.append(command)
+            raise AssertionError("unapproved generated skill must not execute")
+
+    fake = FakeSandbox()
+    monkeypatch.setattr("alberto.sandbox.base.make_sandbox", lambda _kind: fake)
+
+    result = skill_engine.main(["run-all", "generated-run-all"])
+
+    assert result == 1
+    assert fake.calls == []
+    assert "explicit operator approval is required" in capsys.readouterr().err
