@@ -59,36 +59,37 @@ def _try_import(name: str) -> Optional[Any]:
 
 
 def _tool_fn_or_error(mod_attr_pairs: List[tuple], fallback_doc: str):
-    """Build a tool function that tries multiple (module, attr) names.
+    """Build a tool function that resolves an upstream callable and invokes it once.
 
-    If none work, returns a function that raises a clear error.
+    Import/attribute discovery may fall through to another candidate. Once a
+    callable is invoked, however, do not retry it (or another candidate): a
+    TypeError can originate inside the tool after a side effect has occurred.
     """
     def runner(alberto, args: Dict[str, Any]) -> Dict[str, Any]:
-        last_err = None
         for mod_name, attr_names in mod_attr_pairs:
             mod = _try_import(mod_name)
             if mod is None:
                 continue
             for attr in attr_names:
                 fn = getattr(mod, attr, None)
-                if fn is None:
+                if not callable(fn):
                     continue
+                parameters = _signature(fn)
+                # Module-level callables that explicitly request agent context
+                # are unbound functions; pass the supplied Alberto instance.
+                wants_context = bool(parameters and parameters[0] in {"self", "agent", "alberto"})
                 try:
-                    sig = _signature(fn)
-                    if "self" in sig:
-                        # Bound method or instance call
-                        try:
-                            return fn(alberto, **args) if isinstance(alberto, type) else fn(**args)
-                        except TypeError:
-                            pass
-                    return fn(**args)
-                except Exception as e:
-                    last_err = e
-                    continue
-        # All paths failed — return clear error
+                    return fn(alberto, **args) if wants_context else fn(**args)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "error": f"Hermes tool {mod_name}.{attr} failed: {type(exc).__name__}: {exc}",
+                        "modules_tried": [m for m, _ in mod_attr_pairs],
+                        "hint": fallback_doc,
+                    }
         return {
             "ok": False,
-            "error": f"Hermes tool not available (missing module or function)",
+            "error": "Hermes tool not available (missing module or function)",
             "modules_tried": [m for m, _ in mod_attr_pairs],
             "hint": fallback_doc,
         }
