@@ -304,3 +304,186 @@ def test_mimo_app_create_refuses_host_materialization_for_docker_sandbox(tmp_pat
     assert "Docker mode is refused" in result["error"]
     assert calls == []
     assert not (home / "apps").exists()
+
+
+
+def _passing_plan():
+    return {
+        "spec": {"content": "requirements", "verdict": {"verdict": "pass"}},
+        "tdd": {"content": "acceptance tests", "verdict": {"verdict": "pass"}},
+        "review": {"content": "security review", "verdict": {"verdict": "pass"}},
+    }
+
+
+def test_mimo_app_create_rejects_invalid_request_shapes_before_planning(tmp_path):
+    import pytest
+
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, *args, **kwargs):
+            raise AssertionError("invalid requests must be rejected before planning")
+
+    agent = SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home))
+    cases = [
+        ({"name": "../escape", "spec": "valid spec"}, "slug"),
+        ({"name": "missing-spec"}, "valid 'name'"),
+        ({"name": "too-long-spec", "spec": "x" * 4001}, "at most 4000"),
+        ({"name": "wrong-stack", "spec": "valid", "stack": "python"}, "unsupported stack"),
+        ({"name": "empty-output", "spec": "valid", "output_dir": ""}, "non-empty path"),
+        ({"name": "non-string-output", "spec": "valid", "output_dir": []}, "non-empty path"),
+    ]
+    for args, expected_error in cases:
+        result = _mimo_app_create(agent, args)
+        assert result["ok"] is False
+        assert expected_error in result["error"]
+
+
+def test_mimo_app_create_reports_generation_json_error_without_artifact(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            return "this is not JSON"
+
+        def judge(self, candidate, *, criteria=None):
+            raise AssertionError("invalid JSON must be rejected before review")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "bad-json", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "valid JSON" in result["error"]
+    assert not (home / "apps" / "bad-json").exists()
+
+
+def test_mimo_app_create_rejects_dynamic_frontend_import(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            manifest = json.loads(generated_manifest())
+            manifest["files"]["frontend/src/App.tsx"] = (
+                "const x = import('untrusted-module'); export default function App() { return null; }"
+            )
+            return json.dumps(manifest)
+
+        def judge(self, candidate, *, criteria=None):
+            raise AssertionError("dynamic import must be rejected before review")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "dynamic-import", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "dynamic import" in result["error"]
+    assert not (home / "apps" / "dynamic-import").exists()
+
+
+def test_mimo_app_create_rejects_host_file_access_in_generated_backend(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            manifest = json.loads(generated_manifest())
+            manifest["files"]["backend/main.py"] = (
+                "from fastapi import FastAPI\napp = FastAPI()\nopen('outside.txt', 'w')\n"
+            )
+            return json.dumps(manifest)
+
+        def judge(self, candidate, *, criteria=None):
+            raise AssertionError("host file access must be rejected before review")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "host-access", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "prohibited dynamic-code or host-access" in result["error"]
+    assert not (home / "apps" / "host-access").exists()
+
+
+def test_mimo_app_create_rejects_backend_without_fastapi_app(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class Mimo:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            manifest = json.loads(generated_manifest())
+            manifest["files"]["backend/main.py"] = "def app():\n    return {'ok': True}\n"
+            return json.dumps(manifest)
+
+        def judge(self, candidate, *, criteria=None):
+            raise AssertionError("missing FastAPI construction must be rejected before review")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=Mimo(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "no-fastapi", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "must construct a FastAPI application" in result["error"]
+    assert not (home / "apps" / "no-fastapi").exists()
+
+
+def test_mimo_app_create_surfaces_planning_generation_and_review_failures(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    class PlanningFailure:
+        def compose(self, spec, *, steps):
+            raise RuntimeError("provider unavailable")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=PlanningFailure(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "planning-failure", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "planning failed" in result["error"]
+
+    class GenerationFailure:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=GenerationFailure(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "generation-failure", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "source generation failed" in result["error"]
+
+    class ReviewFailure:
+        def compose(self, spec, *, steps):
+            return _passing_plan()
+
+        def invoke(self, prompt, **kwargs):
+            return generated_manifest()
+
+        def judge(self, candidate, *, criteria=None):
+            raise RuntimeError("review unavailable")
+
+    result = _mimo_app_create(
+        SimpleNamespace(mimo=ReviewFailure(), sandbox=SimpleNamespace(home=lambda: home)),
+        {"name": "review-failure", "spec": "a safe app"},
+    )
+    assert result["ok"] is False
+    assert "source review failed" in result["error"]

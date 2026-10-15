@@ -142,3 +142,108 @@ def test_cli_model_test_never_prints_api_secret(capsys):
     output = capsys.readouterr().out
     assert secret not in output
     assert "OPENAI_API_KEY=***" in output
+
+
+
+@pytest.mark.parametrize(
+    ("argv", "handler_name", "expected"),
+    [
+        (
+            ["memory", "set", "project.goal", "Ship", "safe", "app"],
+            "cmd_memory",
+            {"action": "set", "key": "project.goal", "value": "Ship safe app"},
+        ),
+        (
+            ["model", "set", "chat", "openrouter", "openai/gpt-4o-mini",
+             "https://openrouter.ai/api", "OPENROUTER_API_KEY"],
+            "cmd_model",
+            {"action": "set", "task": "chat", "provider": "openrouter",
+             "model_id": "openai/gpt-4o-mini", "base_url": "https://openrouter.ai/api",
+             "cred_env": "OPENROUTER_API_KEY"},
+        ),
+        (
+            ["squad", "run", "engineering", "Build", "the", "app"],
+            "cmd_squad",
+            {"action": "run", "name": "engineering", "prompt": "Build the app"},
+        ),
+        (
+            ["s", "add", "reviewer", "Review", "this", "diff"],
+            "cmd_shortcut",
+            {"action": "add", "key": "reviewer", "expansion": "Review this diff"},
+        ),
+        (
+            ["hermes", "exec", "print('hello", "world')"],
+            "cmd_hermes",
+            {"action": "exec", "code": "print('hello world')"},
+        ),
+    ],
+)
+def test_main_parses_and_maps_positional_arguments(monkeypatch, argv, handler_name, expected):
+    from alberto import cli
+
+    captured = {}
+
+    class FakeAlberto:
+        def shutdown(self):
+            captured["shutdown"] = True
+
+    monkeypatch.setattr(cli, "_get_alberto", lambda: FakeAlberto())
+
+    def capture(args, _agent):
+        captured.update(vars(args))
+        return 0
+
+    monkeypatch.setattr(cli, handler_name, capture)
+
+    assert cli.main(argv) == 0
+    assert all(captured.get(key) == value for key, value in expected.items())
+    assert captured["shutdown"] is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["memory", "set", "key"],
+        ["model", "set", "chat", "provider"],
+        ["model", "test"],
+        ["squad", "run", "engineering"],
+        ["s", "add", "reviewer"],
+        ["hermes", "browser"],
+        ["hermes", "exec"],
+    ],
+)
+def test_main_rejects_incomplete_commands_before_agent_initialization(monkeypatch, argv):
+    from alberto import cli
+
+    monkeypatch.setattr(
+        cli, "_get_alberto",
+        lambda: pytest.fail("agent must not initialize for invalid CLI arguments"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+
+
+def test_main_empty_argv_does_not_fall_back_to_process_arguments(monkeypatch):
+    from alberto import cli
+
+    monkeypatch.setattr(
+        cli, "_get_alberto",
+        lambda: pytest.fail("agent must not initialize when argparse has no command"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main([])
+    assert exc.value.code == 2
+
+
+def test_mcp_call_reports_invalid_json_without_invoking_server(capsys):
+    from types import SimpleNamespace
+    from alberto.cli import cmd_mcp
+
+    class MCP:
+        def call(self, *args):
+            pytest.fail("MCP call must not run when arguments are invalid JSON")
+
+    args = SimpleNamespace(mcp_action="call", mcp_args=["server", "tool", "{invalid"])
+    assert cmd_mcp(args, SimpleNamespace(mcp=MCP())) == 1
+    assert "invalid JSON tool arguments" in capsys.readouterr().err
