@@ -16,8 +16,10 @@ Tools wrapped (all real upstream modules):
   checkpoint, blueprint, approval, process_registry, threat_patterns.
 """
 from __future__ import annotations
+import ast
 import json
 import os
+import shutil
 import sys
 import time
 import base64
@@ -57,36 +59,37 @@ def _try_import(name: str) -> Optional[Any]:
 
 
 def _tool_fn_or_error(mod_attr_pairs: List[tuple], fallback_doc: str):
-    """Build a tool function that tries multiple (module, attr) names.
+    """Build a tool function that resolves an upstream callable and invokes it once.
 
-    If none work, returns a function that raises a clear error.
+    Import/attribute discovery may fall through to another candidate. Once a
+    callable is invoked, however, do not retry it (or another candidate): a
+    TypeError can originate inside the tool after a side effect has occurred.
     """
     def runner(alberto, args: Dict[str, Any]) -> Dict[str, Any]:
-        last_err = None
         for mod_name, attr_names in mod_attr_pairs:
             mod = _try_import(mod_name)
             if mod is None:
                 continue
             for attr in attr_names:
                 fn = getattr(mod, attr, None)
-                if fn is None:
+                if not callable(fn):
                     continue
+                parameters = _signature(fn)
+                # Module-level callables that explicitly request agent context
+                # are unbound functions; pass the supplied Alberto instance.
+                wants_context = bool(parameters and parameters[0] in {"self", "agent", "alberto"})
                 try:
-                    sig = _signature(fn)
-                    if "self" in sig:
-                        # Bound method or instance call
-                        try:
-                            return fn(alberto, **args) if isinstance(alberto, type) else fn(**args)
-                        except TypeError:
-                            pass
-                    return fn(**args)
-                except Exception as e:
-                    last_err = e
-                    continue
-        # All paths failed — return clear error
+                    return fn(alberto, **args) if wants_context else fn(**args)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "error": f"Hermes tool {mod_name}.{attr} failed: {type(exc).__name__}: {exc}",
+                        "modules_tried": [m for m, _ in mod_attr_pairs],
+                        "hint": fallback_doc,
+                    }
         return {
             "ok": False,
-            "error": f"Hermes tool not available (missing module or function)",
+            "error": "Hermes tool not available (missing module or function)",
             "modules_tried": [m for m, _ in mod_attr_pairs],
             "hint": fallback_doc,
         }
@@ -108,6 +111,11 @@ def tool_browser(alberto, args):
     url = args.get("url", "")
     if not url:
         return {"ok": False, "error": "missing 'url'"}
+    try:
+        from ..runtime.function_caller import _validate_public_web_url, _SafeWebRedirectHandler
+        _validate_public_web_url(url)
+    except Exception as e:
+        return {"ok": False, "error": f"blocked unsafe browser URL: {e}", "url": url}
     # Try real upstream browser_tool (camofox)
     mod = _try_import("browser_tool")
     if mod is not None:
@@ -128,7 +136,16 @@ def tool_browser(alberto, args):
     try:
         ctx = ssl.create_default_context()
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        # Match webfetch's pinned-connection policy. URL validation alone is
+        # insufficient if urllib resolves the hostname again during connect.
+        from ..runtime.function_caller import _PinnedHTTPHandler, _PinnedHTTPSHandler
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(),
+            _PinnedHTTPSHandler(context=ctx),
+            _SafeWebRedirectHandler(),
+        )
+        with opener.open(req, timeout=30) as resp:
             data = resp.read(5 * 1024 * 1024).decode("utf-8", errors="replace")
         text = re.sub(r"<script.*?</script>", "", data, flags=re.S | re.I)
         text = re.sub(r"<style.*?</style>", "", text, flags=re.S | re.I)
@@ -142,60 +159,78 @@ def tool_browser(alberto, args):
 
 
 def tool_code_execution(alberto, args):
-    """Real Hermes code execution (PTC with UDS RPC)."""
+    """Execute bounded Python source only through Alberto's configured sandbox."""
     code = args.get("code", "")
-    if not code:
+    if not isinstance(code, str) or not code.strip():
         return {"ok": False, "error": "missing 'code'"}
-    mod = _try_import("code_execution_tool")
-    if mod is not None:
-        for fn_name in ("execute_python", "run_python", "execute", "run"):
-            fn = getattr(mod, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                result = fn(code, language=args.get("language", "python"), timeout=args.get("timeout", 60))
-                if isinstance(result, dict):
-                    return {"ok": True, **result}
-                return {"ok": True, "stdout": str(result), "stderr": "", "returncode": 0}
-            except Exception as e:
-                return {"ok": False, "error": f"code_execution_tool.{fn_name}: {e}"}
-    # Fallback: subprocess
-    tmp = Path("/tmp") / f"alberto-{int(time.time()*1000)}.py"
-    tmp.write_text(code, encoding="utf-8")
+    if len(code.encode("utf-8")) > 256 * 1024:
+        return {"ok": False, "error": "code exceeds the 256 KiB execution limit"}
+    language = str(args.get("language", "python")).strip().lower()
+    if language not in ("python", "python3", "py"):
+        return {"ok": False, "error": "only Python execution is supported by the sandboxed code tool"}
+    raw_timeout = args.get("timeout", 60)
+    if isinstance(raw_timeout, bool):
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
     try:
-        r = subprocess.run(["python3", str(tmp)], capture_output=True, text=True,
-                          timeout=args.get("timeout", 60))
-        return {"ok": True, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+        timeout = int(raw_timeout)
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
+    if str(raw_timeout).strip() != str(timeout) or not 1 <= timeout <= 120:
+        return {"ok": False, "error": "invalid timeout: expected an integer from 1 to 120 seconds"}
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "write", None)) or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "a configured sandbox is required for code execution"}
+
+    import uuid
+    filename = f".alberto-code-{uuid.uuid4().hex}.py"
+    relative_path = Path(filename)
+    file_path = Path(sandbox.home()) / filename
+    try:
+        sandbox.write(relative_path, code)
+        python_executable = "python3" if getattr(sandbox, "_mode", None) == "docker" else sys.executable
+        result = sandbox.run(
+            [python_executable, str(file_path)],
+            timeout=timeout,
+            cwd=sandbox.home(),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed code execution failed: {type(e).__name__}: {e}"}
     finally:
-        try: tmp.unlink()
-        except Exception: pass
+        try:
+            sandbox.run(["rm", "-f", str(file_path)], timeout=5, cwd=sandbox.home())
+        except Exception:
+            pass
 
 
 def tool_terminal(alberto, args):
-    """Real Hermes terminal — shell command execution."""
+    """Execute a terminal command only through Alberto's configured sandbox."""
     cmd = args.get("command", "")
-    if not cmd:
+    if not isinstance(cmd, str) or not cmd.strip():
         return {"ok": False, "error": "missing 'command'"}
-    mod = _try_import("terminal_tool")
-    if mod is not None:
-        for fn_name in ("run", "execute", "shell", "terminal"):
-            fn = getattr(mod, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                result = fn(cmd, timeout=args.get("timeout", 60))
-                if isinstance(result, dict):
-                    return {"ok": True, **result}
-                return {"ok": True, "output": str(result)}
-            except Exception as e:
-                return {"ok": False, "error": f"terminal_tool.{fn_name}: {e}"}
-    # Fallback: subprocess
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "a configured sandbox is required for terminal execution"}
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                          timeout=args.get("timeout", 60))
-        return {"ok": True, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout"}
+        timeout = max(1, min(int(args.get("timeout", 60)), 120))
+        result = sandbox.run(
+            ["bash", "-lc", cmd],
+            timeout=timeout,
+            cwd=sandbox.home(),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed terminal execution failed: {type(e).__name__}: {e}"}
 
 
 def tool_mcp(alberto, args):
@@ -217,6 +252,12 @@ def tool_mcp(alberto, args):
         server = args.get("server", "")
         tool_name = args.get("tool", "")
         tool_args = args.get("args", {})
+        if not isinstance(server, str) or not server.strip() or len(server) > 200:
+            return {"ok": False, "error": "MCP invoke requires a valid server name"}
+        if not isinstance(tool_name, str) or not tool_name.strip() or len(tool_name) > 200:
+            return {"ok": False, "error": "MCP invoke requires a valid tool name"}
+        if not isinstance(tool_args, dict):
+            return {"ok": False, "error": "MCP tool args must be an object"}
         mod = _try_import("mcp_tool")
         if mod is not None:
             for fn_name in ("invoke", "call", "call_tool"):
@@ -228,6 +269,7 @@ def tool_mcp(alberto, args):
                     except Exception as e:
                         return {"ok": False, "error": str(e)}
         return {"ok": False, "error": f"MCP {server}/{tool_name} not available"}
+    return {"ok": False, "error": f"unsupported MCP action: {action}"}
 
 
 def tool_vision(alberto, args):
@@ -491,24 +533,71 @@ def tool_homeassistant(alberto, args):
     return {"ok": False, "error": "homeassistant not configured (HASS_URL + HASS_TOKEN)"}
 
 
+def _resolve_sandbox_output_path(sandbox, raw_output: str = "") -> Path:
+    """Resolve a TTS destination inside a sandbox home usable by the host TTS provider."""
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        raise ValueError("a configured sandbox is required for TTS output")
+    # The current upstream TTS provider executes in this Python process and
+    # writes to a host path. A Docker-only /tmp path refers to a different
+    # filesystem, so pretending it is isolated would be incorrect.
+    if getattr(sandbox, "isolation_level", "") == "docker-container":
+        raise ValueError("TTS provider is not sandbox-executed; Docker mode is unsupported until binary output is transferred through the sandbox API")
+    home = Path(sandbox.home()).expanduser().resolve()
+    voice_root = home / ".hermes" / "voice"
+    candidate = Path(raw_output).expanduser() if raw_output else voice_root / f"{int(time.time() * 1000)}.mp3"
+    if not candidate.is_absolute():
+        candidate = home / candidate
+    # Reject an output symlink before resolve() follows it.
+    if candidate.is_symlink():
+        raise ValueError("TTS output must not be a symbolic link")
+    # Resolve existing symlinks in every existing path component before mkdir.
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        raise ValueError("TTS output path escapes sandbox home") from None
+    parent = resolved.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    # Re-resolve after directory creation to catch pre-existing or raced symlinks.
+    resolved_parent = parent.resolve()
+    try:
+        resolved_parent.relative_to(home)
+    except ValueError:
+        raise ValueError("TTS output parent escapes sandbox home") from None
+    return resolved_parent / resolved.name
+
+
 def tool_voice_tts(alberto, args):
-    """Real Hermes TTS — edge (free), elevenlabs, openai, MiniMax, mistral, gemini, xai, neutts, kitten, piper."""
+    """Real Hermes TTS, with output confined to the configured sandbox home."""
     text = args.get("text", "")
     provider = args.get("provider", "edge")
     voice = args.get("voice", "")
     output = args.get("output_path", "")
-    if not text:
+    if not isinstance(text, str) or not text.strip():
         return {"ok": False, "error": "missing 'text'"}
+    if not isinstance(provider, str) or not provider.strip():
+        return {"ok": False, "error": "invalid TTS provider"}
+    if output is not None and not isinstance(output, str):
+        return {"ok": False, "error": "output_path must be a string"}
+    try:
+        out = _resolve_sandbox_output_path(getattr(alberto, "sandbox", None), output or "")
+    except (OSError, ValueError, TypeError) as e:
+        return {"ok": False, "error": str(e)}
     mod = _try_import("tts_tool")
     if mod is not None:
         for fn_name in ("synthesize", "tts", "speak", "generate_speech"):
             fn = getattr(mod, fn_name, None)
             if fn:
                 try:
-                    out = output or str(alberto.sandbox.home() / f".hermes/voice/{int(time.time()*1000)}.mp3")
-                    Path(out).parent.mkdir(parents=True, exist_ok=True)
-                    result = fn(text=text, provider=provider, voice=voice, output=out)
-                    return {"ok": True, "output": out, "provider": provider, "result": result if not isinstance(result, str) else None}
+                    result = fn(text=text, provider=provider, voice=voice, output=str(out))
+                    if not out.is_file() or out.is_symlink():
+                        return {
+                            "ok": False,
+                            "error": f"tts.{provider} returned without creating a regular output file",
+                            "output": str(out),
+                        }
+                    return {"ok": True, "output": str(out), "provider": provider,
+                            "result": result if not isinstance(result, str) else None}
                 except Exception as e:
                     return {"ok": False, "error": f"tts.{provider}: {e}"}
     return {"ok": False, "error": f"tts_tool not available (provider={provider})"}
@@ -563,36 +652,53 @@ def tool_computer_use(alberto, args):
 
 
 def tool_file(alberto, args):
-    """Real Hermes file_tools + file_operations."""
-    action = args.get("action", "read")
-    path = args.get("path", "")
-    for mod_name in ("file_tools", "file_operations"):
-        mod = _try_import(mod_name)
-        if mod is None:
-            continue
-        fn = getattr(mod, action, None) or getattr(mod, f"file_{action}", None)
-        if fn:
-            try:
-                result = fn(path=path, **args) if "path" in _signature(fn) else fn(path, **args)
-                return {"ok": True, "result": result}
-            except Exception as e:
-                return {"ok": False, "error": str(e)}
-    # Fallback: pure Python
+    """Read/write/list files only within Alberto's configured sandbox home."""
+    action = str(args.get("action", "read")).strip().lower()
+    raw_path = str(args.get("path", "")).strip()
+    if not raw_path:
+        return {"ok": False, "error": "missing 'path'"}
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not all(callable(getattr(sandbox, name, None)) for name in ("home", "read", "write", "exists", "run")):
+        return {"ok": False, "error": "a configured sandbox is required for file operations"}
+
     try:
-        p = Path(path)
+        home = Path(sandbox.home()).resolve()
+        supplied = Path(raw_path).expanduser()
+        candidate = supplied if supplied.is_absolute() else home / supplied
+        resolved = candidate.resolve()
+        try:
+            relative = resolved.relative_to(home)
+        except ValueError:
+            return {"ok": False, "error": "path escapes sandbox home"}
+        if not relative.parts:
+            if action not in ("list", "exists"):
+                return {"ok": False, "error": "operation on sandbox root is not allowed"}
         if action == "read":
-            return {"ok": True, "content": p.read_text(encoding="utf-8", errors="replace")}
+            if not sandbox.exists(relative):
+                return {"ok": False, "error": "file not found"}
+            return {"ok": True, "content": sandbox.read(relative)}
         if action == "write":
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(args.get("content", ""), encoding="utf-8")
-            return {"ok": True, "wrote": len(args.get("content", ""))}
+            value = args.get("content", "")
+            if not isinstance(value, str):
+                return {"ok": False, "error": "'content' must be a string"}
+            sandbox.write(relative, value)
+            return {"ok": True, "wrote": len(value)}
         if action == "list":
-            return {"ok": True, "entries": [str(x) for x in p.iterdir()]}
+            if not sandbox.exists(relative):
+                return {"ok": False, "error": "directory not found"}
+            result = sandbox.run(
+                ["ls", "-1A", str(relative) if relative.parts else "."],
+                timeout=10,
+                cwd=home,
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": (result.stderr or "directory listing failed")[:500]}
+            return {"ok": True, "entries": [line for line in (result.stdout or "").splitlines()]}
         if action == "exists":
-            return {"ok": True, "exists": p.exists()}
+            return {"ok": True, "exists": sandbox.exists(relative)}
+        return {"ok": False, "error": f"unknown action: {action}"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": f"unknown action: {action}"}
+        return {"ok": False, "error": f"sandbox file operation failed: {type(e).__name__}: {e}"}
 
 
 def tool_patch_parser(alberto, args):
@@ -1250,32 +1356,54 @@ def _openrouter(alberto, args):
 
 
 def _patch_apply(alberto, args):
-    """Apply a unified diff safely."""
+    """Apply a unified diff only inside a configured sandbox workspace."""
     patch = args.get("patch", "")
     if not patch:
         return {"ok": False, "error": "missing 'patch'"}
-    mod = _try_import("patch_parser")
-    if mod is not None:
-        for fn_name in ("apply", "apply_patch"):
-            fn = getattr(mod, fn_name, None)
-            if fn:
-                try:
-                    return {"ok": True, "result": fn(patch)}
-                except Exception as e:
-                    return {"ok": False, "error": str(e)}
-    # Fallback: write to /tmp and git apply
-    tmp = Path("/tmp") / f"alberto-patch-{int(time.time()*1000)}.patch"
-    tmp.write_text(patch, encoding="utf-8")
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not all(callable(getattr(sandbox, name, None)) for name in ("home", "write", "run")):
+        return {"ok": False, "error": "a configured sandbox is required for patch application"}
+
+    import uuid
+    home = Path(sandbox.home()).resolve()
+    workspace_arg = Path(str(args.get("workspace", "."))).expanduser()
+    workspace = workspace_arg if workspace_arg.is_absolute() else home / workspace_arg
+    workspace = workspace.resolve()
     try:
-        r = subprocess.run(["git", "apply", "--check", str(tmp)],
-                          capture_output=True, text=True)
-        if r.returncode == 0:
-            r2 = subprocess.run(["git", "apply", str(tmp)], capture_output=True, text=True)
-            return {"ok": r2.returncode == 0, "stdout": r2.stdout, "stderr": r2.stderr}
-        return {"ok": False, "error": f"patch check failed: {r.stderr}"}
+        workspace.relative_to(home)
+    except ValueError:
+        return {"ok": False, "error": "patch workspace escapes sandbox home"}
+    if not sandbox.exists(workspace.relative_to(home)):
+        return {"ok": False, "error": "patch workspace does not exist inside sandbox"}
+    patch_name = f".alberto-patch-{uuid.uuid4().hex}.patch"
+    patch_path = home / patch_name
+    try:
+        sandbox.write(Path(patch_name), patch)
+        check = sandbox.run(
+            ["git", "apply", "--check", str(patch_path)],
+            timeout=30,
+            cwd=workspace,
+        )
+        if check.returncode != 0:
+            return {"ok": False, "error": f"patch check failed: {(check.stderr or check.stdout or '')[:1000]}"}
+        result = sandbox.run(
+            ["git", "apply", str(patch_path)],
+            timeout=30,
+            cwd=workspace,
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"sandboxed patch application failed: {type(e).__name__}: {e}"}
     finally:
-        try: tmp.unlink()
-        except Exception: pass
+        try:
+            sandbox.run(["rm", "-f", str(patch_path)], timeout=5, cwd=home)
+        except Exception:
+            pass
 
 
 def _mimo_session(alberto, args):
@@ -1287,7 +1415,10 @@ def _mimo_session(alberto, args):
     if action == "list":
         return {"ok": True, "sessions": alberto.mimo.session_list()}
     if action == "checkpoint":
-        sid = args.get("session_id") or alberto.mimo.session_list()[0]["id"] if alberto.mimo.session_list() else None
+        sid = args.get("session_id")
+        if not sid:
+            sessions = alberto.mimo.session_list()
+            sid = sessions[0].get("id") if sessions and isinstance(sessions[0], dict) else None
         if not sid:
             return {"ok": False, "error": "no session_id and no sessions"}
         return {"ok": True, "checkpoint": alberto.mimo.checkpoint(sid, note=args.get("note", ""))}
@@ -1356,6 +1487,214 @@ def _mimo_compose(alberto, args):
     return {"ok": True, "result": alberto.mimo.compose(args["spec"], steps=args.get("steps"))}
 
 
+def _mimo_app_create(alberto, args):
+    """Plan, generate, review, and safely materialize a constrained MiMo app."""
+    name = args.get("name")
+    spec = args.get("spec") or args.get("description")
+    if not isinstance(name, str) or not isinstance(spec, str) or not spec.strip():
+        return {"ok": False, "error": "need a valid 'name' and non-empty 'spec'/'description'"}
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+        return {"ok": False, "error": "name must be a 1-64 character slug"}
+    if len(spec) > 4000:
+        return {"ok": False, "error": "app specification must be at most 4000 characters"}
+    if args.get("stack", "react-vite-fastapi") != "react-vite-fastapi":
+        return {"ok": False, "error": "unsupported stack; supported stack: react-vite-fastapi"}
+    output_dir = args.get("output_dir", ".")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        return {"ok": False, "error": "output_dir must be a non-empty path"}
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "configured sandbox is required for app creation"}
+    if getattr(sandbox, "isolation_level", "") == "docker-container":
+        return {
+            "ok": False,
+            "error": "MiMo app creation currently materializes files through host filesystem APIs; Docker mode is refused until file transfer and build/test execution use the sandbox API",
+        }
+    try:
+        sandbox_root = Path(sandbox.home()).resolve()
+    except (OSError, TypeError, ValueError) as exc:
+        return {"ok": False, "error": f"cannot resolve sandbox home: {type(exc).__name__}"}
+    apps_root = sandbox_root / "apps"
+    try:
+        if apps_root.is_symlink():
+            return {"ok": False, "error": "sandbox apps directory must not be a symlink"}
+        apps_root.mkdir(parents=True, exist_ok=True)
+        if apps_root.resolve() != apps_root:
+            return {"ok": False, "error": "sandbox apps directory must not resolve outside the sandbox"}
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot prepare sandbox apps directory: {type(exc).__name__}"}
+    requested = Path(output_dir)
+    destination = (requested if requested.is_absolute() else apps_root / requested).resolve()
+    if destination != apps_root and apps_root not in destination.parents:
+        return {"ok": False, "error": "output_dir must stay inside the sandbox apps directory"}
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        destination = destination.resolve()
+        if destination != apps_root and apps_root not in destination.parents:
+            return {"ok": False, "error": "output_dir must stay inside the sandbox apps directory"}
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot prepare app output directory: {type(exc).__name__}"}
+    final_app = destination / name
+    if final_app.exists() or final_app.is_symlink():
+        return {"ok": False, "error": f"app {name} already exists at {final_app}"}
+
+    try:
+        plan = alberto.mimo.compose(
+            "Plan a React/Vite frontend and FastAPI backend for this app. "
+            "Return implementation requirements, acceptance tests, and security review. "
+            "Do not return executable code.\n\n" + spec,
+            steps=["spec", "tdd", "review"],
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo planning failed: {type(exc).__name__}"}
+    required_steps = ["spec", "tdd", "review"]
+    if not isinstance(plan, dict) or not plan:
+        return {"ok": False, "error": "MiMo did not return a usable application plan"}
+    failed = [step for step in required_steps if step not in plan]
+    for step, value in plan.items():
+        if (not isinstance(value, dict)
+                or not isinstance(value.get("content"), str)
+                or not value.get("content", "").strip()
+                or value.get("content", "").startswith("[error]")):
+            failed.append(step)
+            continue
+        verdict = value.get("verdict")
+        if not isinstance(verdict, dict) or verdict.get("verdict") != "pass":
+            failed.append(step)
+    if failed:
+        return {"ok": False, "error": "MiMo planning incomplete",
+                "failed_steps": list(dict.fromkeys(failed)), "plan": plan}
+
+    allowed_files = {"frontend/src/App.tsx", "backend/main.py"}
+    generation_prompt = (
+        "Implement the application described below using the reviewed plan. "
+        "Return ONLY one JSON object with exactly this schema: "
+        '{"files":{"frontend/src/App.tsx":"complete React TSX source",'
+        '"backend/main.py":"complete FastAPI Python source"}}. '
+        "Include both files and no others. Use only React already installed in the frontend; "
+        "do not add frontend package imports. Backend imports may use FastAPI, Pydantic, "
+        "and safe standard-library modules only. Do not use subprocess, os, sys, socket, "
+        "urllib, requests, eval, exec, compile, or dynamic imports. Do not include markdown fences. "
+        "The backend must define app = FastAPI(...). No commands, dependency changes, "
+        "or installation steps. The generated source will be reviewed but not executed here.\n\n"
+        f"User specification:\n{spec}\n\nReviewed plan:\n{json.dumps(plan, ensure_ascii=False)[:18000]}"
+    )
+    try:
+        generated = alberto.mimo.invoke(
+            generation_prompt, task="code", max_tokens=8192, temperature=0.2
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo source generation failed: {type(exc).__name__}"}
+    if not isinstance(generated, str) or not generated.strip() or len(generated) > 160 * 1024:
+        return {"ok": False, "error": "MiMo source manifest is empty or exceeds 160 KiB"}
+    manifest_text = generated.strip()
+    fence = chr(96) * 3
+    if manifest_text.startswith(fence):
+        manifest_lines = manifest_text.splitlines()
+        manifest_text = "\n".join(manifest_lines[1:-1] if manifest_lines[-1].strip().startswith(fence)
+                                   else manifest_lines[1:])
+    try:
+        manifest = json.loads(manifest_text)
+    except (json.JSONDecodeError, TypeError):
+        return {"ok": False, "error": "MiMo source manifest must be valid JSON"}
+    if not isinstance(manifest, dict) or set(manifest) != {"files"} or not isinstance(manifest["files"], dict):
+        return {"ok": False, "error": "MiMo source manifest has an invalid schema"}
+    sources = manifest["files"]
+    if set(sources) != allowed_files:
+        return {"ok": False, "error": "MiMo must provide exactly the allowed frontend and backend source files"}
+    for relative, source in sources.items():
+        rel_path = Path(relative)
+        if rel_path.is_absolute() or ".." in rel_path.parts or "\\" in relative:
+            return {"ok": False, "error": f"unsafe generated path: {relative}"}
+        if not isinstance(source, str) or not source.strip() or "\x00" in source or len(source.encode("utf-8")) > 64 * 1024:
+            return {"ok": False, "error": f"invalid generated source for {relative}"}
+    frontend = sources["frontend/src/App.tsx"]
+    if not re.search(r"\bexport\s+default\b", frontend):
+        return {"ok": False, "error": "generated frontend must export a default React component"}
+    imports = re.findall(r"\bfrom\s*['\"]([^'\"]+)['\"]|\bimport\s*['\"]([^'\"]+)['\"]", frontend)
+    if any((a or b) != "react" for a, b in imports) or re.search(r"\b(?:require|import)\s*\(", frontend):
+        return {"ok": False, "error": "generated frontend contains a non-allowlisted or dynamic import"}
+    backend = sources["backend/main.py"]
+    try:
+        tree = ast.parse(backend, filename="generated-main.py")
+    except SyntaxError as exc:
+        return {"ok": False, "error": f"generated backend has invalid Python syntax at line {exc.lineno}"}
+    allowed_import_roots = {"fastapi", "pydantic", "typing", "datetime", "json", "math", "uuid", "collections", "enum"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".", 1)[0] for alias in node.names]
+            if any(root not in allowed_import_roots for root in roots):
+                return {"ok": False, "error": "generated backend contains a non-allowlisted import"}
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".", 1)[0]
+            if root not in allowed_import_roots or node.level:
+                return {"ok": False, "error": "generated backend contains a non-allowlisted import"}
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {
+            "eval", "exec", "compile", "__import__", "getattr", "setattr", "globals",
+            "locals", "vars", "open", "breakpoint",
+        }:
+            return {"ok": False, "error": "generated backend contains a prohibited dynamic-code or host-access operation"}
+        elif isinstance(node, ast.Name) and node.id == "__builtins__":
+            return {"ok": False, "error": "generated backend may not introspect builtins"}
+    if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FastAPI"
+               for node in ast.walk(tree)):
+        return {"ok": False, "error": "generated backend must construct a FastAPI application"}
+
+    try:
+        review = alberto.mimo.judge(
+            frontend + "\n\n# --- generated backend ---\n" + backend,
+            criteria=(
+                "Both sources must implement the user's app specification, be coherent and complete, "
+                "use only allowlisted imports/dependencies, contain no dynamic code execution, and be "
+                "valid React TSX plus syntactically valid FastAPI Python. Return pass only when all hold."
+            ),
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo generated-source review failed: {type(exc).__name__}"}
+    if not isinstance(review, dict) or review.get("verdict") != "pass":
+        return {"ok": False, "error": "MiMo generated-source review did not pass", "review": review}
+
+    try:
+        from alberto.runtime.app_creator import AppCreator
+        created = AppCreator(output_dir=destination).create(
+            name, spec, stack="react-vite-fastapi", run=False
+        )
+        if not created.get("ok"):
+            return created
+        raw_app_dir = Path(created["path"])
+        app_dir = raw_app_dir.resolve()
+        if app_dir.parent != destination or app_dir.name != name:
+            # Never recursively delete a resolved path that escaped the output root.
+            if (not raw_app_dir.is_symlink() and raw_app_dir.name == name
+                    and raw_app_dir.parent.resolve() == destination):
+                shutil.rmtree(raw_app_dir, ignore_errors=True)
+            return {"ok": False, "error": "created app path escaped the validated output directory"}
+        for relative, source in sources.items():
+            target = (app_dir / relative).resolve()
+            target.relative_to(app_dir)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source, encoding="utf-8")
+    except Exception as exc:
+        try:
+            if "created" in locals() and isinstance(created, dict) and created.get("ok") and created.get("path"):
+                candidate = Path(created["path"])
+                if (not candidate.is_symlink() and candidate.name == name
+                        and candidate.parent.resolve() == destination):
+                    shutil.rmtree(candidate, ignore_errors=True)
+        except Exception:
+            pass
+        return {"ok": False, "error": f"app materialization failed: {type(exc).__name__}"}
+    created["generated_files"] = sorted(sources)
+    return {
+        "ok": True,
+        "engine": "MiMo",
+        "planning_steps": ["spec", "tdd", "review"],
+        "plan": plan,
+        "source_review": review,
+        "application": created,
+        "note": "MiMo generated the application source and passed static/review gates; this tool did not execute generated code.",
+    }
+
 def _mimo_subagent(alberto, args):
     """MiMo parallel subagents."""
     if not args.get("prompt"):
@@ -1374,25 +1713,67 @@ def _mimo_snapshot(alberto, args):
 
 
 def _mimo_worktree(alberto, args):
-    """MiMo git worktree. cwd defaults to sandbox home or current dir."""
-    import subprocess
-    path = args.get("path", "")
+    """Create a MiMo worktree through the configured sandbox, never host subprocess."""
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)) or not callable(getattr(sandbox, "run", None)):
+        return {"ok": False, "error": "a configured sandbox is required for worktree operations"}
+    raw_path = args.get("path", "")
     branch = args.get("branch", "alberto-session")
-    cwd = args.get("cwd") or str(alberto.sandbox.home())
-    if not path:
+    raw_cwd = args.get("cwd", "")
+    if not isinstance(raw_path, str) or not raw_path.strip():
         return {"ok": False, "error": "need 'path'"}
-    if not os.path.isdir(os.path.join(cwd, ".git")):
-        # Try to find a git repo upward from cwd
-        cur = cwd
-        while cur != "/":
-            if os.path.isdir(os.path.join(cur, ".git")):
-                cwd = cur
-                break
-            cur = os.path.dirname(cur)
-    r = subprocess.run(["git", "worktree", "add", "-b", branch, path],
-                      capture_output=True, text=True, cwd=cwd)
-    return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr,
-            "branch": branch, "path": path, "cwd": cwd}
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,119}", branch) or ".." in branch.split("/"):
+        return {"ok": False, "error": "invalid git branch name"}
+    try:
+        home = Path(sandbox.home()).expanduser().resolve()
+        requested_cwd = Path(raw_cwd).expanduser() if raw_cwd else home
+        if not requested_cwd.is_absolute():
+            requested_cwd = home / requested_cwd
+        requested_cwd = requested_cwd.resolve()
+        requested_cwd.relative_to(home)
+        # Find the nearest Git root, but never walk above the sandbox boundary.
+        repo = requested_cwd
+        while repo != home and not (repo / ".git").exists():
+            repo = repo.parent
+        if not (repo / ".git").exists():
+            return {"ok": False, "error": "no git repository found inside sandbox home"}
+        repo.relative_to(home)
+        # Git interprets relative worktree paths from its cwd (the repo root),
+        # not from sandbox.home(). Preserve that contract while checking the
+        # resolved destination against the sandbox boundary.
+        target = Path(raw_path).expanduser()
+        if not target.is_absolute():
+            target = requested_cwd / target
+        target = target.resolve()
+        target.relative_to(home)
+        if target == home or target.exists():
+            return {"ok": False, "error": "worktree path must be a new path inside sandbox home"}
+        cwd_rel = repo.relative_to(home)
+        target_rel = Path(os.path.relpath(target, repo))
+        parent_rel = target_rel.parent
+        # Validate branch syntax using Git itself, inside the sandbox.
+        check = sandbox.run(["git", "check-ref-format", "--branch", branch],
+                            timeout=10, cwd=repo)
+        if check.returncode != 0:
+            return {"ok": False, "error": "invalid git branch name",
+                    "stderr": (check.stderr or "")[:500]}
+        # Create the destination parent inside the sandbox; never mutate host
+        # paths directly, even when the sandbox is a local/container adapter.
+        if str(parent_rel) not in ("", "."):
+            mkdir_result = sandbox.run(["mkdir", "-p", str(parent_rel)],
+                                       timeout=10, cwd=repo)
+            if mkdir_result.returncode != 0:
+                return {"ok": False, "error": "could not create worktree parent inside sandbox",
+                        "stderr": (mkdir_result.stderr or "")[:500]}
+        result = sandbox.run(["git", "worktree", "add", "-b", branch, str(target_rel)],
+                             timeout=60, cwd=repo)
+        return {"ok": result.returncode == 0, "stdout": result.stdout or "",
+                "stderr": result.stderr or "", "branch": branch,
+                "path": str(target), "cwd": str(cwd_rel)}
+    except ValueError:
+        return {"ok": False, "error": "worktree cwd or path escapes sandbox home"}
+    except Exception as e:
+        return {"ok": False, "error": f"worktree operation failed: {type(e).__name__}: {e}"}
 
 
 def _mimo_distill(alberto, args):
@@ -1401,21 +1782,17 @@ def _mimo_distill(alberto, args):
 
 
 def _nemoclaw_sandbox(alberto, args):
-    """NemoClaw sandbox management."""
+    """Report that sandbox operations are unavailable until a real NemoClaw adapter exists."""
     action = args.get("action", "list")
     name = args.get("name", "alberto-ai")
-    # NemoClaw manages sandboxes via its CLI which requires Docker+OpenShell
-    # We expose the intent and provide install instructions
     return {
-        "ok": True,
+        "ok": False,
+        "available": False,
         "sandbox": name,
         "action": action,
-        "note": "NemoClaw sandbox requires Docker + OpenShell installed on host",
-        "install": "git clone https://github.com/NVIDIA/NemoClaw && cd NemoClaw && bash install.sh",
-        "current": {
-            "kind": type(alberto.sandbox).__name__,
-            "home": str(alberto.sandbox.home()),
-        }
+        "error": "NemoClaw sandbox operations are not wired to the host CLI; no operation was performed",
+        "requirements": ["Docker", "NemoClaw", "OpenShell"],
+        "install": "https://github.com/NVIDIA/NemoClaw",
     }
 
 
@@ -1432,47 +1809,45 @@ def _nemoclaw_policy(alberto, args):
         if p.exists():
             return {"ok": True, "preset": preset, "policy": p.read_text()[:2000]}
         return {"ok": False, "error": f"preset {preset} not found"}
-    return {"ok": True, "action": action, "note": "use NemoClaw CLI on host to apply policies"}
+    return {"ok": False, "available": False, "action": action,
+            "error": "NemoClaw policy changes are not wired to the host CLI; no policy was applied"}
 
 
 def _nemoclaw_shields(alberto, args):
-    """NemoClaw security shields status."""
-    # Real implementation lives in nemoclaw/src/commands/shields-status.ts
-    # We call its TypeScript via subprocess (requires npx/node on host)
+    """Fail closed when live NemoClaw shield status cannot be queried."""
     return {
-        "ok": True,
-        "shields": {
-            "secrets_scanner": "active",
-            "path_traversal": "active",
-            "ssrf_guard": "active",
-            "blueprint_state": "active",
-        },
-        "note": "shields run inside the NemoClaw daemon",
+        "ok": False,
+        "available": False,
+        "error": "NemoClaw shield status adapter is not implemented; shield state is unknown",
+        "shields": None,
+        "note": "No shield was verified as active by this tool",
     }
 
 
 def _nemoclaw_inference(alberto, args):
-    """NemoClaw inference providers (NVIDIA/local)."""
+    """Report provider configuration as unknown until queried from NemoClaw."""
     return {
-        "ok": True,
-        "providers": ["nvidia", "local-inference", "openai", "anthropic"],
-        "default": "nvidia",
-        "note": "configure via pluginConfig.inference in openclaw.plugin.json",
+        "ok": False,
+        "available": False,
+        "error": "NemoClaw inference configuration adapter is not implemented; configured providers are unknown",
+        "providers": None,
+        "default": None,
+        "note": "No inference provider configuration was read or changed",
     }
 
 
 def _nemoclaw_backup(alberto, args):
-    """NemoClaw backup/restore/upgrade."""
+    """Fail closed: backup, restore, and upgrade must not claim success without execution."""
     action = args.get("action", "backup")
-    target = args.get("target", "")
-    if action == "backup":
-        return {"ok": True, "action": "backup", "target": target or "/sandbox/.mimo",
-                "note": "backs up the agent home, including .mimo, .aiox-squads, .hermes"}
-    if action == "restore":
-        return {"ok": True, "action": "restore", "target": target}
-    if action == "upgrade":
-        return {"ok": True, "action": "upgrade", "note": "pulls latest NemoClaw + rebuilds image"}
-    return {"ok": False, "error": f"action {action} not supported"}
+    if action not in {"backup", "restore", "upgrade"}:
+        return {"ok": False, "error": f"action {action} not supported"}
+    return {
+        "ok": False,
+        "available": False,
+        "action": action,
+        "target": args.get("target"),
+        "error": f"NemoClaw {action} is not implemented by this adapter; no operation was performed",
+    }
 
 
 def _nemoclaw_blueprint(alberto, args):
@@ -1494,7 +1869,7 @@ def _nemoclaw_blueprint(alberto, args):
         if bp_yaml.exists():
             return {"ok": True, "yaml": bp_yaml.read_text()[:5000]}
         return {"ok": False, "error": "blueprint.yaml not found"}
-    return {"ok": True, "action": action}
+    return {"ok": False, "error": f"action {action} not supported"}
 
 
 def _aiox_squad(alberto, args):
@@ -1692,6 +2067,8 @@ HERMES_TOOL_REGISTRY = [
      "params": {"prompt": "string", "n?": "int"}, "fn": _mimo_max},
     {"name": "mimo_compose", "engine": "mimo", "desc": "MiMo compose pipeline (spec → tdd → review)",
      "params": {"spec": "string", "steps?": "list"}, "fn": _mimo_compose},
+    {"name": "mimo_app_create", "engine": "mimo", "desc": "Use MiMo spec/TDD/review planning and scaffold a React/Vite + FastAPI app",
+     "params": {"name": "string", "spec": "string", "output_dir?": "string", "stack?": "string"}, "fn": _mimo_app_create},
     {"name": "mimo_subagent", "engine": "mimo", "desc": "MiMo parallel subagents",
      "params": {"prompt": "string", "count?": "int"}, "fn": _mimo_subagent},
     {"name": "mimo_snapshot", "engine": "mimo", "desc": "MiMo memory snapshot (save/restore)",

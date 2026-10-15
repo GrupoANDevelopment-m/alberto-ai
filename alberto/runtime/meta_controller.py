@@ -19,6 +19,7 @@ The MetaController orchestrates all of this.
 """
 from __future__ import annotations
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ class SubTask:
     id: str
     description: str
     skill: Optional[str] = None  # chosen skill
+    depends_on: List[str] = field(default_factory=list)
     status: str = "pending"  # pending | running | done | failed | blocked
     output: Any = None
     error: Optional[str] = None
@@ -249,6 +251,9 @@ class MetaController:
                 id=f"st-{i+1}",
                 description=st,
                 skill=skill_name,
+                # Phrase decomposition preserves order. Later tasks depend on
+                # the previous task until a richer planner identifies branches.
+                depends_on=[f"st-{i}"] if i > 0 else [],
             ))
         plan.status = "executing"
         self.plans[objective] = plan
@@ -266,17 +271,47 @@ class MetaController:
         return parts
 
     def _pick_skill(self, task: str) -> Optional[str]:
-        """Use SkillManager.recommend to pick the best skill."""
-        recs = self.skill_manager.recommend(task, top=1)
-        return recs[0]["skill"]["name"] if recs else None
+        """Pick a recommended skill only when the task has lexical relevance.
+
+        Recommendation statistics may rank a historically successful but unrelated
+        skill first. The lexical gate prevents that fallback and lets execution
+        block safely when no relevant capability is available.
+        """
+        relevant = self.skill_manager.search(task, limit=5, min_score=0.1)
+        if not relevant:
+            return None
+        relevant_names = {
+            item.get("skill", {}).get("name")
+            for item in relevant
+            if isinstance(item, dict) and isinstance(item.get("skill"), dict)
+        }
+        recs = self.skill_manager.recommend(task, top=5)
+        for item in recs:
+            skill = item.get("skill", {}) if isinstance(item, dict) else {}
+            name = skill.get("name") if isinstance(skill, dict) else None
+            if name in relevant_names:
+                return name
+        first = relevant[0].get("skill", {})
+        return first.get("name") if isinstance(first, dict) else None
 
     def execute(self, plan: Plan) -> Plan:
         """Run the plan. Returns updated plan."""
         self._emit("execute_start", {"objective": plan.objective})
+        completed = {st.id: st.status for st in plan.subtasks}
         for st in plan.subtasks:
-            if st.status in ("done",):
+            if st.status == "done":
+                completed[st.id] = "done"
+                continue
+            unmet = [dep for dep in st.depends_on if completed.get(dep) != "done"]
+            if unmet:
+                st.status = "blocked"
+                st.error = "dependency not completed: " + ", ".join(unmet)
+                st.finished_at = time.time()
+                completed[st.id] = "blocked"
+                self._emit("subtask_blocked", {"id": st.id, "reason": st.error})
                 continue
             self._execute_subtask(plan, st)
+            completed[st.id] = st.status
         # Re-evaluate
         plan.status = "done" if all(s.status == "done" for s in plan.subtasks) else "failed"
         plan.iterations += 1
@@ -304,8 +339,18 @@ class MetaController:
                                               duration=time.time() - st.started_at)
             self._emit("subtask_done", {"id": st.id, "skill": st.skill})
             return
-        # Failure path: research, learn, evolve, create new skill
+        # A policy denial is not a skill failure. Do not research around,
+        # mutate, evolve, or create skills to bypass an execution boundary.
         st.error = error
+        if isinstance(error, str) and error.startswith("skill execution refused:"):
+            st.status = "blocked"
+            st.finished_at = time.time()
+            self._emit("subtask_blocked", {
+                "id": st.id, "reason": "execution policy denied the operation"
+            })
+            return
+
+        # Failure path: research, learn, evolve, create new skill
         self.skill_manager.record_outcome(st.skill, success=False,
                                           duration=time.time() - st.started_at)
         # Detect obstacle
@@ -332,6 +377,11 @@ class MetaController:
                 if success2:
                     st.status = "done"
                     st.output = output2
+                    st.error = None
+                    st.finished_at = time.time()
+                    self.skill_manager.record_outcome(
+                        st.skill, success=True, duration=time.time() - (st.started_at or st.finished_at)
+                    )
                     self._emit("subtask_recovered", {"id": st.id})
                     return
             # 4. Create new skill if obstacle is novel
@@ -347,37 +397,38 @@ class MetaController:
         self._emit("subtask_failed", {"id": st.id, "status": st.status, "attempts": st.attempts})
 
     def _try_skill(self, st: SubTask, *, skill_override: Optional[str] = None) -> tuple:
-        """Try to execute a skill. Returns (success, output, error)."""
+        """Execute a skill only through the configured sandbox boundary.
+
+        LocalSandbox and NemoClaw's host fallback execute processes on the host;
+        they are not OS isolation. Refuse untrusted skill code there unless an
+        operator explicitly opts into that development-only risk.
+        """
         skill_name = skill_override or st.skill
         if not skill_name:
             return False, None, "no skill"
-        from alberto.runtime.skill_engine import find_skill, extract_code_blocks
-        path = find_skill(skill_name)
-        if not path:
-            return False, None, f"skill {skill_name} not found"
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        # Find first executable block
-        for b in blocks:
-            if b["lang"] in ("bash", "sh", "shell", "python", "python3", "py"):
-                import subprocess, sys as _sys
-                try:
-                    if b["lang"].startswith("python"):
-                        result = subprocess.run(
-                            [_sys.executable, "-c", b["code"][:2000]],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                    else:
-                        result = subprocess.run(
-                            ["bash", "-c", b["code"][:2000]],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                    return result.returncode == 0, result.stdout, result.stderr
-                except subprocess.TimeoutExpired:
-                    return False, None, "timeout"
-                except Exception as e:
-                    return False, None, str(e)
-        return False, None, "no executable block"
+
+        sandbox = getattr(self.alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "run", None)):
+            return False, None, "skill execution refused: configured sandbox is unavailable"
+
+        isolation = getattr(sandbox, "isolation_level", None)
+        docker_isolated = isolation == "docker-container" or getattr(sandbox, "_mode", None) == "docker"
+        allow_host = os.environ.get("ALBERTO_ALLOW_HOST_SKILL_EXECUTION", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if not docker_isolated and not allow_host:
+            return (
+                False, None,
+                "skill execution refused: Docker isolation is required; "
+                "host execution requires explicit ALBERTO_ALLOW_HOST_SKILL_EXECUTION=1",
+            )
+
+        from alberto.runtime.skill_engine import run_skill
+        result = run_skill(skill_name, [], sandbox=sandbox, timeout=10)
+        if not result.get("ok"):
+            error = result.get("error") or result.get("stderr") or "skill returned a non-zero exit code"
+            return False, result.get("stdout"), str(error)[:1000]
+        return True, result.get("stdout", ""), ""
 
     def _try_evolve_skill(self, name: str, error: str, obstacle: str):
         """Evolve a skill after failure."""

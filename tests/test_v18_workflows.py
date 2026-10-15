@@ -8,10 +8,11 @@ from pathlib import Path
 import yaml
 import pytest
 
-sys.path.insert(0, "/workspace/alberto-ai")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
-WORKFLOWS_DIR = Path("/workspace/alberto-ai/workflows")
-PERSONAS_DIR = Path("/workspace/alberto-ai/personas")
+WORKFLOWS_DIR = REPO_ROOT / "workflows"
+PERSONAS_DIR = REPO_ROOT / "personas"
 
 
 def _load_workflows():
@@ -78,7 +79,9 @@ class TestWorkflowsPersonaConsistency:
         for data in workflows.values():
             for step in data["workflow"]:
                 used.add(step["persona"])
-        orphans = personas - used
+        # "engineer" is a generic fallback persona used outside named workflows.
+        intentionally_standalone = {"engineer"}
+        orphans = personas - used - intentionally_standalone
         assert not orphans, f"Orphan persona files (not used): {orphans}"
 
     def test_no_numeric_suffix_in_persona_names(self):

@@ -8,12 +8,13 @@ to replace the AIOX stub. These tests verify:
 4. Error handling is real (not stub)
 """
 import os
+from pathlib import Path
 import sys
 import pytest
 
 # Mark heavy integration tests as slow (require real LLM, may rate-limit)
 pytestmark_slow = pytest.mark.slow
-sys.path.insert(0, "/workspace/alberto-ai")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 class TestCrewAIIntegration:
@@ -49,8 +50,8 @@ class TestCrewAISquadExecution:
         from alberto.runtime.crewai_runtime import run_crew_squad
         r = run_crew_squad(
             squad_name="engineering",
-            workflow_yaml_path="/workspace/alberto-ai/workflows/engineering.yaml",
-            personas_dir="/workspace/alberto-ai/personas",
+            workflow_yaml_path=str(Path(__file__).resolve().parent.parent / "workflows" / "engineering.yaml"),
+            personas_dir=str(Path(__file__).resolve().parent.parent / "personas"),
             llm_model="openai/google/diffusiongemma-26b-a4b-it",
             llm_base_url="https://integrate.api.nvidia.com/v1",
             user_prompt="Build a click counter in JS. Brief answer.",
@@ -67,7 +68,7 @@ class TestCrewAISquadExecution:
         r = run_crew_squad(
             squad_name="smoke",
             workflow_yaml_path="/workspace/alberto-ai/workflows/smoke/minimal.yaml",
-            personas_dir="/workspace/alberto-ai/personas",
+            personas_dir=str(Path(__file__).resolve().parent.parent / "personas"),
             llm_model="openai/google/diffusiongemma-26b-a4b-it",
             llm_base_url="https://integrate.api.nvidia.com/v1",
             user_prompt="Count clicks",
@@ -83,7 +84,7 @@ class TestCrewAISquadExecution:
         r = run_crew_squad(
             squad_name="content",
             workflow_yaml_path="/workspace/alberto-ai/workflows/content.yaml",
-            personas_dir="/workspace/alberto-ai/personas",
+            personas_dir=str(Path(__file__).resolve().parent.parent / "personas"),
             llm_model="openai/google/diffusiongemma-26b-a4b-it",
             llm_base_url="https://integrate.api.nvidia.com/v1",
             user_prompt="Write about Angola. Very short.",
@@ -176,7 +177,7 @@ workflow:
         try:
             r = crewai_runtime.run_crew_squad(
                 squad_name="engineering",
-                workflow_yaml_path="/workspace/alberto-ai/workflows/engineering.yaml",
+                workflow_yaml_path=str(Path(__file__).resolve().parent.parent / "workflows" / "engineering.yaml"),
                 personas_dir="/workspace/alberto-ai/personas",
             )
             assert r.get("ok") is False

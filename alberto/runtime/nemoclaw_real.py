@@ -49,16 +49,14 @@ def safe_resolve_path(path: str, sandbox_root: Optional[Path] = None) -> Path:
     Raises:
         PathViolation: if path escapes sandbox or is host-protected
     """
-    sandbox_root = sandbox_root or SANDBOX_ROOT
+    sandbox_root = Path(sandbox_root or SANDBOX_ROOT).resolve()
     if not path:
         raise PathViolation("empty path")
 
-    # Workspace-relative form
+    # Resolve every relative path and enforce containment after resolving.
+    # Do not special-case IDENTITY.md or memory/: '..' and symlinks can
+    # otherwise escape the sandbox through those previously trusted prefixes.
     if not path.startswith("/"):
-        # Allowed forms: IDENTITY.md, memory/...
-        if path in WORKSPACE_ALLOW or any(path.startswith(w) for w in WORKSPACE_ALLOW):
-            return (sandbox_root / path).resolve()
-        # Try as relative to sandbox
         candidate = (sandbox_root / path).resolve()
         _check_in_sandbox(candidate, sandbox_root)
         return candidate
@@ -186,20 +184,47 @@ def scan_secrets(content: str) -> List[Dict[str, str]]:
 
 
 def redact_secrets(content: str) -> Tuple[str, List[Dict[str, str]]]:
-    """Redact all detected secrets. Source: secret-scanner.ts redactSecrets.
+    """Redact detected secrets without substituting one secret's mask for another.
 
     Returns:
         (redacted_text, list_of_matches)
     """
-    redacted = content
-    matches = scan_secrets(content)
-    for m in matches:
-        original_pattern = m["redacted"].split("***")[0]  # reconstruct prefix
-        # Find and replace the full match in content
-        for name, regex in SECRET_PATTERNS:
-            for match in regex.finditer(content):
-                redacted = redacted.replace(match.group(0), m["redacted"])
-    return redacted, matches
+    found = []
+    for name, regex in SECRET_PATTERNS:
+        for match in regex.finditer(content):
+            value = match.group(0)
+            found.append({
+                "start": match.start(),
+                "end": match.end(),
+                "pattern": name,
+                "value": value,
+                "redacted": value[:8] + "***" + value[-4:],
+            })
+
+    # Prefer the longest match at a given start and avoid overlapping spans.
+    # Rebuild from the original string so replacement text is never rescanned.
+    found.sort(key=lambda item: (item["start"], -(item["end"] - item["start"])))
+    selected = []
+    cursor = 0
+    for item in found:
+        if item["start"] < cursor:
+            continue
+        selected.append(item)
+        cursor = item["end"]
+
+    redacted_parts = []
+    cursor = 0
+    for item in selected:
+        redacted_parts.append(content[cursor:item["start"]])
+        redacted_parts.append(item["redacted"])
+        cursor = item["end"]
+    redacted_parts.append(content[cursor:])
+
+    report = [
+        {"pattern": item["pattern"], "redacted": item["redacted"]}
+        for item in selected
+    ]
+    return "".join(redacted_parts), report
 
 
 # === Integration with Alberto ===

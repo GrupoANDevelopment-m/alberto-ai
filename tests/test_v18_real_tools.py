@@ -154,21 +154,35 @@ class TestToolLSP:
 class TestToolActor:
     """Real persistent shell actor."""
 
-    def test_run_echo(self):
+    def test_run_echo(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["actor"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"command": "echo actor-test-98765", "session": "test"})
-        assert "actor-test-98765" in out
-        assert not err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "actor")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"command": "echo actor-test-98765", "session": "test"})
+            assert "actor-test-98765" in out
+            assert not err
+        finally:
+            alberto.sandbox.cleanup()
 
-    def test_session_list(self):
+    def test_session_list(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["actor"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"action": "list_sessions"})
-        assert isinstance(out, str)
-        assert not err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "actor")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"action": "list_sessions"})
+            assert isinstance(out, str)
+            assert not err
+        finally:
+            alberto.sandbox.cleanup()
 
     def test_blocked_command(self):
         """Hermes tirith should block dangerous commands."""
@@ -208,25 +222,37 @@ class TestToolSkill:
 class TestToolApplyPatch:
     """Real patch applier."""
 
-    def test_simple_addition(self):
+    def test_simple_addition(self, tmp_path):
         import os
-        from alberto.runtime.function_caller import TOOL_REGISTRY
-        fn = TOOL_REGISTRY["apply_patch"]
-        class FakeAlberto: pass
-        # Create a temp file
         import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("line1\nline2\nline3\n")
-            fp = f.name
+        from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
+
+        fn = TOOL_REGISTRY["apply_patch"]
+        sandbox = LocalSandbox(base_dir=tmp_path / "patch-sandbox")
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = sandbox
+        alberto = FakeAlberto()
+        fp = sandbox.home() / "sample.txt"
+        fp.write_text("line1\nline2\nline3\n", encoding="utf-8")
         try:
-            # Hermes v4a format requires *** Begin Patch *** wrapper
-            patch = "*** Begin Patch\n*** Update File: " + os.path.basename(fp) + "\n@@\n line1\n+inserted\n line2\n line3\n*** End Patch"
-            out, err = fn(FakeAlberto(), {"path": fp, "patch": patch})
-            # Should succeed (real Hermes v4a)
-            content = Path(fp).read_text()
+            patch = (
+                "*** Begin Patch\n"
+                "*** Update File: sample.txt\n"
+                "@@\n"
+                " line1\n"
+                "+inserted\n"
+                " line2\n"
+                " line3\n"
+                "*** End Patch"
+            )
+            out, err = fn(alberto, {"path": str(fp), "patch": patch})
+            assert not err, out
+            content = fp.read_text(encoding="utf-8")
             assert "inserted" in content, f"Expected 'inserted' in: {content!r}"
         finally:
-            os.unlink(fp)
+            sandbox.cleanup()
 
     def test_blocked_path(self):
         """Traversed path is blocked."""
@@ -241,20 +267,38 @@ class TestToolApplyPatch:
 class TestToolChangeDirectory:
     """Real persistent cwd."""
 
-    def test_pwd(self):
+    def test_pwd(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["change_directory"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"path": "/tmp"})
-        assert not err
-        assert "/tmp" in out
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "cwd")
+        alberto = FakeAlberto()
+        target = alberto.sandbox.home() / "workspace"
+        target.mkdir()
+        try:
+            out, err = fn(alberto, {"path": "workspace"})
+            assert not err
+            assert str(target) in out
+            assert alberto._cwd == str(target)
+        finally:
+            alberto.sandbox.cleanup()
 
-    def test_blocked_path(self):
+    def test_blocked_path(self, tmp_path):
         from alberto.runtime.function_caller import TOOL_REGISTRY
+        from alberto.sandbox.base import LocalSandbox
         fn = TOOL_REGISTRY["change_directory"]
-        class FakeAlberto: pass
-        out, err = fn(FakeAlberto(), {"path": "../../etc"})
-        assert err
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "cwd")
+        alberto = FakeAlberto()
+        try:
+            out, err = fn(alberto, {"path": "../../etc"})
+            assert err
+            assert "escapes sandbox" in out
+        finally:
+            alberto.sandbox.cleanup()
 
 
 class TestToolHealAttempt:

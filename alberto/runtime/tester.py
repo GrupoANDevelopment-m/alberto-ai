@@ -17,12 +17,20 @@ Run via:
 from __future__ import annotations
 import json
 import os
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# Keep CLI-driven benchmarks bounded so a typo or hostile input cannot allocate
+# an unbounded number of futures or overload the machine running the tester.
+MAX_BENCHMARK_REQUESTS = 1000
+MAX_BENCHMARK_CONCURRENCY = 64
+HOST_APP_EXECUTION_OPT_IN = "ALBERTO_ALLOW_HOST_APP_TESTING"
 
 
 class AppTester:
@@ -33,6 +41,29 @@ class AppTester:
         self.frontend = self.app_dir / "frontend"
         self.backend = self.app_dir / "backend"
         self.results = []
+
+    @staticmethod
+    def _host_execution_opted_in() -> bool:
+        """Return whether the operator explicitly allowed running app code on the host.
+
+        App directories may contain untrusted generated code. Until these phases
+        execute through a real isolated sandbox with controlled file transfer,
+        host execution is disabled by default.
+        """
+        return os.environ.get(HOST_APP_EXECUTION_OPT_IN, "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+
+    def _host_execution_denied(self, phase: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "phase": phase,
+            "error": (
+                "refusing to execute app code on the host; configure a real isolated "
+                "sandbox, or explicitly set ALBERTO_ALLOW_HOST_APP_TESTING=1 to accept "
+                "the host-execution risk"
+            ),
+        }
 
     def smoke(self) -> Dict[str, Any]:
         """Quick smoke test: start backend, hit endpoints, screenshot frontend."""
@@ -47,7 +78,9 @@ class AppTester:
             out["tests"].append(test)
         out["passed"] = sum(1 for t in out["tests"] if t.get("ok"))
         out["failed"] = sum(1 for t in out["tests"] if not t.get("ok"))
-        out["ok"] = out["failed"] == 0
+        out["ok"] = bool(out["tests"]) and out["failed"] == 0
+        if not out["tests"]:
+            out["error"] = "no backend or frontend directory to test"
         return out
 
     def perf(self, endpoint: str = "/", *, n_requests: int = 50,
@@ -55,6 +88,14 @@ class AppTester:
         """Performance benchmark. Starts backend, hits endpoint N times concurrent."""
         if not self.backend.exists():
             return {"ok": False, "error": "no backend dir"}
+        if not isinstance(n_requests, int) or isinstance(n_requests, bool) or not 1 <= n_requests <= MAX_BENCHMARK_REQUESTS:
+            return {"ok": False, "error": f"n_requests must be an integer between 1 and {MAX_BENCHMARK_REQUESTS}"}
+        if not isinstance(concurrency, int) or isinstance(concurrency, bool) or not 1 <= concurrency <= MAX_BENCHMARK_CONCURRENCY:
+            return {"ok": False, "error": f"concurrency must be an integer between 1 and {MAX_BENCHMARK_CONCURRENCY}"}
+        if not isinstance(endpoint, str) or not endpoint.startswith("/") or endpoint.startswith("//"):
+            return {"ok": False, "error": "endpoint must be a local absolute path beginning with one slash"}
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("perf")
         # Start backend
         port = self._free_port()
         proc = subprocess.Popen(
@@ -71,30 +112,32 @@ class AppTester:
             latencies = []
             errors = 0
             for i in range(min(20, n_requests)):
-                t0 = time.time()
+                t0 = time.perf_counter()
                 try:
                     with urllib.request.urlopen(f"http://127.0.0.1:{port}{endpoint}", timeout=10) as r:
                         r.read()
-                    latencies.append((time.time() - t0) * 1000)
+                    latencies.append((time.perf_counter() - t0) * 1000)
                 except Exception:
                     errors += 1
             # Concurrent load
             import concurrent.futures
             def hit():
-                t0 = time.time()
+                t0 = time.perf_counter()
                 try:
                     with urllib.request.urlopen(f"http://127.0.0.1:{port}{endpoint}", timeout=10) as r:
                         r.read()
-                    return (time.time() - t0) * 1000, True
+                    return (time.perf_counter() - t0) * 1000, True
                 except Exception:
                     return 0, False
+            concurrent_start = time.perf_counter()
             with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
                 futures = [ex.submit(hit) for _ in range(n_requests)]
                 results = [f.result() for f in futures]
+            concurrent_elapsed = max(time.perf_counter() - concurrent_start, 0.001)
             conc_latencies = [r[0] for r in results if r[1]]
             conc_errors = sum(1 for r in results if not r[1])
             out = {
-                "ok": True,
+                "ok": errors == 0 and conc_errors == 0,
                 "phase": "perf",
                 "endpoint": endpoint,
                 "n_requests": n_requests,
@@ -109,10 +152,11 @@ class AppTester:
                 "concurrent": {
                     "n": len(conc_latencies),
                     "errors": conc_errors,
+                    "duration_s": round(concurrent_elapsed, 6),
                     "p50_ms": self._percentile(conc_latencies, 50),
                     "p95_ms": self._percentile(conc_latencies, 95),
                     "p99_ms": self._percentile(conc_latencies, 99),
-                    "throughput_rps": n_requests / max(sum(conc_latencies) / 1000 / concurrency, 0.001),
+                    "throughput_rps": len(conc_latencies) / concurrent_elapsed,
                 },
             }
             return out
@@ -124,7 +168,9 @@ class AppTester:
                 proc.kill()
 
     def test_install(self) -> Dict[str, Any]:
-        """Test that the app installs cleanly on a fresh setup."""
+        """Test install only after explicit operator opt-in to host execution."""
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("test_install")
         out = {"phase": "test_install", "steps": []}
         # 1. Clean install backend
         if self.backend.exists():
@@ -157,7 +203,9 @@ class AppTester:
         return out
 
     def test_frontend_e2e(self) -> Dict[str, Any]:
-        """End-to-end test of frontend using Playwright (headless)."""
+        """End-to-end test of frontend; host execution requires explicit opt-in."""
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("frontend_e2e")
         if not self.frontend.exists():
             return {"ok": False, "error": "no frontend"}
         if not shutil.which("npm"):
@@ -232,6 +280,8 @@ class AppTester:
 
     # ====== helpers ======
     def _test_backend(self) -> Dict[str, Any]:
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("backend_smoke")
         port = self._free_port()
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port)],

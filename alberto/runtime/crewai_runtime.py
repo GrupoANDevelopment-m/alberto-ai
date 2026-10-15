@@ -131,6 +131,19 @@ def run_crew_squad(
     except Exception as e:
         return {"ok": False, "error": f"failed to load {workflow_yaml_path}: {e}"}
 
+    # Validate all referenced persona files before requiring credentials. This
+    # makes configuration errors deterministic and avoids needless provider setup.
+    personas_path = Path(personas_dir)
+    for persona in wf.get("personas", []):
+        # Workflow-embedded prompts are complete persona definitions and do
+        # not require a duplicate Markdown file.
+        if str(persona.get("system_prompt", "")).strip():
+            continue
+        persona_name = persona.get("name", "")
+        persona_file = personas_path / f"{persona_name}.md"
+        if not persona_file.is_file():
+            return {"ok": False, "error": f"persona file missing: {persona_file}"}
+
     # Build LLM
     api_key = llm_api_key or os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -150,10 +163,12 @@ def run_crew_squad(
     for p in wf.get("personas", []):
         pname = p.get("name", "")
         prole = p.get("role", pname.title())
-        pfile = personas_path / f"{pname}.md"
-        if not pfile.exists():
-            return {"ok": False, "error": f"persona file missing: {pfile}"}
-        content = pfile.read_text(encoding="utf-8")
+        content = str(p.get("system_prompt", "")).strip()
+        if not content:
+            pfile = personas_path / f"{pname}.md"
+            if not pfile.is_file():
+                return {"ok": False, "error": f"persona file missing: {pfile}"}
+            content = pfile.read_text(encoding="utf-8")
         agent = persona_to_agent(pname, content, prole, llm)
         if agent is None:
             return {"ok": False, "error": f"failed to create agent for {pname}"}

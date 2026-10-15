@@ -20,7 +20,7 @@ ALIAS = "Alberto"
 LANGUAGE_DEFAULT = "pt-BR"
 EMOJI = "🤖"
 CREATURE_TYPE = "ai-assistant"
-VERSION = "1.0.0"
+VERSION = "1.8.4"
 
 TONE = {
     "default": "pragmatic",

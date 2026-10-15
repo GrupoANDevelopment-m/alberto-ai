@@ -14,6 +14,7 @@ Output dir: ./apps/<name>/
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,14 @@ class AppCreator:
         if output_dir is not None:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        """Create an app. Returns {path, frontend_url, backend_url, screenshot?}"""
+        # The name becomes a directory, package name, and source-code identifier.
+        # Accept a conservative slug to prevent path traversal and source injection.
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            return {"ok": False, "error": "name must be a 1-64 character slug (letters, digits, _ or -)"}
+        if not isinstance(description, str) or len(description) > 4000:
+            return {"ok": False, "error": "description must be text of at most 4000 characters"}
+        if stack != "react-vite-fastapi":
+            return {"ok": False, "error": "unsupported stack; supported stack: react-vite-fastapi"}
         app_dir = self.output_dir / name
         if app_dir.exists():
             return {"ok": False, "error": f"app {name} already exists at {app_dir}"}
@@ -48,6 +56,24 @@ class AppCreator:
         self._scaffold_frontend(app_dir / "frontend", name, description)
         # Backend: FastAPI
         self._scaffold_backend(app_dir / "backend", name, description)
+        # Container definitions are required for the generated compose file to build.
+        (app_dir / "frontend" / "Dockerfile").write_text("""FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --no-audit --no-fund
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+""")
+        (app_dir / "backend" / "Dockerfile").write_text("""FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY main.py ./
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+""")
         # docker-compose
         (app_dir / "docker-compose.yml").write_text(self._docker_compose(name))
         # README
@@ -73,7 +99,7 @@ class AppCreator:
             "name": name, "private": True, "version": "0.1.0",
             "type": "module",
             "scripts": {
-                "dev": "vite --host 0.0.0.0 --port 3000",
+                "dev": "vite --host 127.0.0.1 --port 3000",
                 "build": "tsc && vite build",
                 "preview": "vite preview",
             },
@@ -132,13 +158,16 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><
         (src / "index.css").write_text("""@tailwind base; @tailwind components; @tailwind utilities;
 body { font-family: ui-sans-serif, system-ui, sans-serif; }
 """)
+        # Encode user-provided content as JSX string expressions, not source fragments.
+        name_literal = json.dumps(name)
+        description_literal = json.dumps(description)
         (src / "App.tsx").write_text(f"""import {{ useState }} from 'react'
 export default function App() {{
   const [count, setCount] = useState(0)
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-700 text-white flex flex-col items-center justify-center p-8">
-      <h1 className="text-5xl font-bold mb-4">{name}</h1>
-      <p className="text-slate-300 mb-8 max-w-md text-center">{description}</p>
+      <h1 className="text-5xl font-bold mb-4">{{{name_literal}}}</h1>
+      <p className="text-slate-300 mb-8 max-w-md text-center">{{{description_literal}}}</p>
       <div className="bg-white/10 backdrop-blur rounded-lg p-8 flex flex-col items-center gap-4">
         <div className="text-6xl font-mono">{{count}}</div>
         <button onClick={{() => setCount(c => c + 1)}}
@@ -153,13 +182,15 @@ export default function App() {{
 """)
 
     def _scaffold_backend(self, path: Path, name: str, description: str) -> None:
-        (path / "main.py").write_text(f"""\"\"\"{name} — FastAPI backend.\"\"\"
+        name_literal = json.dumps(name)
+        description_literal = json.dumps(description)
+        (path / "main.py").write_text(f"""\"\"\"Generated FastAPI backend.\"\"\"
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="{name}", description="{description}")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title={name_literal}, description={description_literal})
+app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"], allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
 
 
 class Count(BaseModel):
@@ -171,12 +202,12 @@ state = Count()
 
 @app.get("/")
 def root():
-    return {{"name": "{name}", "description": "{description}", "version": "0.1.0"}}
+    return {{"name": {name_literal}, "description": {description_literal}, "version": "0.1.0"}}
 
 
 @app.get("/api/health")
 def health():
-    return {{"ok": True, "name": "{name}"}}
+    return {{"ok": True, "name": {name_literal}}}
 
 
 @app.get("/api/count")
@@ -193,7 +224,7 @@ def increment():
         (path / "pyproject.toml").write_text(f"""[project]
 name = "{name}-backend"
 version = "0.1.0"
-description = "{description}"
+description = {description_literal}
 requires-python = ">=3.10"
 """)
 
@@ -202,11 +233,11 @@ requires-python = ">=3.10"
 services:
   frontend:
     build: ./frontend
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     depends_on: [backend]
   backend:
     build: ./backend
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
 """
 
     def _readme(self, name: str, description: str) -> str:
@@ -239,24 +270,77 @@ docker compose up
 """
 
     def run(self, app_dir: Path) -> Dict[str, Any]:
-        """Try to install deps and start both servers."""
+        """Install dependencies and attempt to start both local development servers."""
         result = {"frontend_started": False, "backend_started": False}
+        backend_proc = None
+        frontend_proc = None
         # Backend
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
                            str(app_dir / "backend" / "requirements.txt")],
                           check=True, capture_output=True, timeout=120)
             backend_proc = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=app_dir / "backend",
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                # Avoid undrained pipes blocking long-running server processes.
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             time.sleep(3)
             if backend_proc.poll() is None:
                 result["backend_started"] = True
                 result["backend_pid"] = backend_proc.pid
+            else:
+                result["backend_error"] = "backend process exited during startup"
         except Exception as e:
             result["backend_error"] = str(e)
+
+        # Frontend: do not silently report success if npm is unavailable or the
+        # development server exits during startup.
+        try:
+            if not shutil.which("npm"):
+                result["frontend_error"] = "npm not available"
+            else:
+                install = subprocess.run(
+                    ["npm", "install", "--no-audit", "--no-fund"],
+                    cwd=app_dir / "frontend", check=False,
+                    capture_output=True, text=True, timeout=180,
+                )
+                if install.returncode != 0:
+                    result["frontend_error"] = (install.stderr or "npm install failed")[-500:]
+                else:
+                    frontend_proc = subprocess.Popen(
+                        ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"],
+                        cwd=app_dir / "frontend",
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    time.sleep(2)
+                    if frontend_proc.poll() is None:
+                        result["frontend_started"] = True
+                        result["frontend_pid"] = frontend_proc.pid
+                    else:
+                        result["frontend_error"] = "frontend process exited during startup"
+        except Exception as e:
+            result["frontend_error"] = str(e)
+        # A partial application is not a successful launch. Tear down whichever
+        # service did start so failed frontend startup cannot leak a backend (or
+        # vice versa) listening in the background.
+        if not (result["backend_started"] and result["frontend_started"]):
+            for label, process in (("backend", backend_proc), ("frontend", frontend_proc)):
+                if process is None or not result.get(f"{label}_started"):
+                    continue
+                try:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                    result[f"{label}_cleanup"] = "terminated because the full app did not start"
+                except Exception as exc:
+                    result[f"{label}_cleanup_error"] = type(exc).__name__
+                result[f"{label}_started"] = False
+                result.pop(f"{label}_pid", None)
+        result["ok"] = result["backend_started"] and result["frontend_started"]
         return result
 
 

@@ -24,9 +24,13 @@ deepseek-v4-pro, gpt-4, claude, minimax, etc.
 """
 from __future__ import annotations
 import json
+import http.client
 import os
 import re
 import subprocess
+import sys
+import urllib.request
+import shlex
 from .upstream_bridge import (
     real_memory_set as _bridge_memory_set,
     real_memory_get as _bridge_memory_get,
@@ -46,7 +50,6 @@ from .upstream_bridge import (
     real_extract_document as _bridge_extract_document,
     real_budget_config as _bridge_budget_config,
 )
-import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -85,6 +88,40 @@ import re as _re_security
 _BLOCKED_RE = _re_security.compile("|".join(BLOCKED_SHELL_PATTERNS))
 
 
+def _validated_shell_timeout(value, *, maximum: int = 3600):
+    """Parse a tool-provided timeout without leaking conversion errors or unbounded waits."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if timeout < 1 or timeout > maximum:
+        return None
+    return timeout
+
+
+def _execute_shell_command(alberto, command: str, timeout: int):
+    """Run shell commands only through the configured sandbox; fail closed."""
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
+        raise RuntimeError("a configured sandbox is required for shell execution")
+    home = Path(sandbox.home()).resolve()
+    cwd = home
+    requested_cwd = getattr(alberto, "_cwd", None)
+    if requested_cwd:
+        try:
+            candidate = Path(requested_cwd).expanduser().resolve()
+            candidate.relative_to(home)
+            if candidate.is_dir():
+                cwd = candidate
+        except (OSError, ValueError):
+            cwd = home
+    return sandbox.run(["bash", "-lc", command], timeout=timeout, cwd=str(cwd))
+
+
 @register_tool("run_shell")
 def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     """Run a shell command. Args: command (str), timeout (int, default 30).
@@ -92,7 +129,9 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     SECURITY (v1.7): Blocked-shell-pattern check applied.
     """
     cmd = args.get("command", "")
-    timeout = int(args.get("timeout", 30))
+    timeout = _validated_shell_timeout(args.get("timeout", 30))
+    if timeout is None:
+        return "invalid timeout: expected an integer from 1 to 3600 seconds", True
     if not cmd:
         return "no command provided", True
     blocked_match = _BLOCKED_RE.search(cmd)
@@ -109,7 +148,7 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
@@ -120,18 +159,70 @@ def tool_run_shell(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("file_read")
 def tool_file_read(alberto, args: Dict) -> Tuple[str, bool]:
-    """Read a file. Args: path (str), max_lines (int, default 200)."""
+    """Read a bounded prefix of a file. Args: path (str), max_lines (int, default 200)."""
     path = args.get("path", "")
-    max_lines = int(args.get("max_lines", 200))
+    raw_max_lines = args.get("max_lines", 200)
     if not path:
         return "no path provided", True
+    if isinstance(raw_max_lines, bool):
+        return "invalid max_lines: expected an integer from 1 to 2000", True
+    try:
+        max_lines = int(raw_max_lines)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid max_lines: expected an integer from 1 to 2000", True
+    if str(raw_max_lines).strip() != str(max_lines) or not 1 <= max_lines <= 2000:
+        return "invalid max_lines: expected an integer from 1 to 2000", True
     try:
         p = Path(path).expanduser()
+        # Reads must use the same sandbox containment policy as writes; a
+        # protected-path blacklist alone does not prevent arbitrary host reads.
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file reads", True
+        sandbox_root = Path(sandbox.home()).resolve()
+        try:
+            p = safe_resolve_path(str(p), sandbox_root=sandbox_root)
+            # safe_resolve_path intentionally permits general /tmp paths for
+            # other workflows; file_read must be stricter and stay inside the
+            # configured workspace even when the target is under /tmp.
+            p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: path must remain inside configured sandbox ({exc})", True
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
         if not p.exists():
             return f"file not found: {path}", True
-        content = p.read_text(errors="replace")
-        lines = content.splitlines()[:max_lines]
-        return "\n".join(lines), False
+        # Stream only the requested prefix instead of loading an arbitrarily
+        # large file into memory. Cap output for files containing huge lines.
+        output = []
+        total_chars = 0
+        truncated = False
+        with p.open("r", errors="replace") as stream:
+            for _ in range(max_lines):
+                line = stream.readline(100_001)
+                if not line:
+                    break
+                remaining = 100_000 - total_chars
+                if len(line) > remaining:
+                    if remaining > 0:
+                        output.append(line[:remaining].rstrip("\r\n"))
+                    truncated = True
+                    break
+                output.append(line.rstrip("\r\n"))
+                total_chars += len(line)
+                if total_chars >= 100_000:
+                    truncated = True
+                    break
+                if len(line) == 100_001:
+                    truncated = True
+                    break
+        result = "\n".join(output)
+        if truncated:
+            result += "\n[truncated: file read output limit reached]"
+        return result, False
     except Exception as e:
         return f"error: {e}", True
 
@@ -154,8 +245,8 @@ def tool_file_write(alberto, args: Dict) -> Tuple[str, bool]:
                 return f"BLOCKED by NemoClaw: {msg_or_path}", True
             content = final_content
             path = msg_or_path
-        except ImportError:
-            pass
+        except ImportError as e:
+            return f"NemoClaw security policy unavailable; refusing write: {e}", True
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
@@ -182,8 +273,8 @@ def tool_memory_set(alberto, args: Dict) -> Tuple[str, bool]:
         if not allowed:
             return f"NemoClaw blocked: {msg}", True
         value = final_value
-    except ImportError:
-        pass
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing memory write: {e}", True
     # Real Hermes memory_tool via bridge
     return _bridge_memory_set(key, value, tags=tags)
 
@@ -255,15 +346,27 @@ def tool_alberto_cli(alberto, args: Dict) -> Tuple[str, bool]:
     if not cmd_str:
         return "no args", True
     try:
-        # Build env with PYTHONPATH
+        # Only allow explicitly safe CLI subcommands when invoked by the agent.
+        from alberto.security_whitelist import validate_alberto_subcommand
+        is_safe, reason = validate_alberto_subcommand(cmd_str)
+        if not is_safe:
+            return f"BLOCKED by Alberto security: {reason}", True
+        try:
+            cli_args = shlex.split(cmd_str)
+        except ValueError as e:
+            return f"invalid CLI argument quoting: {e}", True
+        if not cli_args:
+            return "no args", True
+        # Build env with PYTHONPATH; pass argv directly so shell metacharacters
+        # are data, never command separators or substitutions.
         env = os.environ.copy()
         base_dir = str(Path(__file__).parent.parent.parent)
         existing_pp = env.get("PYTHONPATH", "")
         if base_dir not in existing_pp:
             env["PYTHONPATH"] = f"{base_dir}:{existing_pp}" if existing_pp else base_dir
-        full_cmd = f"{sys.executable} -m alberto.cli {cmd_str}"
-        r = subprocess.run(full_cmd, shell=True, capture_output=True, text=True,
-                          timeout=120, env=env)
+        full_cmd = [sys.executable, "-m", "alberto.cli", *cli_args]
+        r = subprocess.run(full_cmd, shell=False, capture_output=True, text=True,
+                           timeout=120, env=env)
         out = (r.stdout or "") + (r.stderr or "")
         return f"exit_code={r.returncode}\n{out[:3000]}", r.returncode != 0
     except subprocess.TimeoutExpired:
@@ -283,7 +386,10 @@ def tool_heal_attempt(alberto, args: Dict) -> Tuple[str, bool]:
     """
     error = args.get("error", "")
     context = args.get("context", "")
-    auto_apply = bool(args.get("auto_apply", False))
+    auto_apply_value = args.get("auto_apply", False)
+    if not isinstance(auto_apply_value, bool):
+        return "auto_apply must be a boolean", True
+    auto_apply = auto_apply_value
     if not error:
         return "no error provided", True
     try:
@@ -311,7 +417,9 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
     """MiMo bash.ts equivalent — execute a shell command, return stdout/stderr/exit code.
     Args: command (str), timeout (int, default 30), description (str, optional)."""
     cmd = args.get("command", "")
-    timeout = int(args.get("timeout", 30))
+    timeout = _validated_shell_timeout(args.get("timeout", 30))
+    if timeout is None:
+        return "invalid timeout: expected an integer from 1 to 3600 seconds", True
     if not cmd:
         return "no command provided", True
     # NemoClaw: block dangerous read commands (cat ~/.ssh, /etc/shadow, etc)
@@ -330,7 +438,7 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = _execute_shell_command(alberto, cmd, timeout)
         out = r.stdout or ""
         err = r.stderr or ""
         combined = out + (("\n[stderr]\n" + err) if err else "")
@@ -352,21 +460,79 @@ def tool_bash(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("read")
 def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo read.ts equivalent — read file contents with optional line range.
-    Args: path (str), start_line (int, default 0), max_lines (int, default 200)."""
+    """MiMo read.ts equivalent with bounded streaming and optional line range."""
     path = args.get("path", "")
-    start = int(args.get("start_line", 0))
-    max_lines = int(args.get("max_lines", 200))
+    raw_start = args.get("start_line", 0)
+    raw_max_lines = args.get("max_lines", 200)
     if not path:
         return "no path", True
+    if isinstance(raw_start, bool) or isinstance(raw_max_lines, bool):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
+    try:
+        start_line = int(raw_start)
+        max_lines = int(raw_max_lines)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
+    if (str(raw_start).strip() != str(start_line)
+            or str(raw_max_lines).strip() != str(max_lines)
+            or not 0 <= start_line <= 100_000
+            or not 1 <= max_lines <= 2000):
+        return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
     try:
         p = Path(path).expanduser()
+        # Line-ranged reads must not bypass the workspace boundary enforced
+        # by file_read. Protected-path checks alone do not confine arbitrary reads.
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: protected file path", True
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file reads", True
+        sandbox_root = Path(sandbox.home()).resolve()
+        try:
+            p = safe_resolve_path(str(p), sandbox_root=sandbox_root)
+            p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: path must remain inside configured sandbox ({exc})", True
+        if is_protected_path(str(p)):
+            return "BLOCKED by NemoClaw: resolved path is protected", True
         if not p.exists():
             return f"file not found: {path}", True
-        lines = p.read_text(errors="replace").splitlines()
-        end = min(start + max_lines, len(lines))
-        out = "\n".join(f"{i+1:4d}| {line}" for i, line in enumerate(lines[start:end], start=start))
-        return f"file: {path} (lines {start+1}-{end} of {len(lines)})\n{out}", False
+        # Python's text iterator materializes a complete line. Refuse unusually
+        # large files here so a single giant line cannot bypass the output cap.
+        if p.stat().st_size > 10 * 1024 * 1024:
+            return "file exceeds the 10 MiB limit for line-ranged reads; use file_read or grep", True
+
+        selected = []
+        total_chars = 0
+        truncated = False
+        end_line = start_line
+        with p.open("r", errors="replace") as stream:
+            for line_number, line in enumerate(stream):
+                if line_number < start_line:
+                    continue
+                if len(selected) >= max_lines:
+                    break
+                remaining = 100_000 - total_chars
+                if len(line) > remaining:
+                    if remaining > 0:
+                        selected.append(f"{line_number + 1:4d}| {line[:remaining].rstrip(chr(13) + chr(10))}")
+                    truncated = True
+                    end_line = line_number + 1
+                    break
+                selected.append(f"{line_number + 1:4d}| {line.rstrip(chr(13) + chr(10))}")
+                total_chars += len(line)
+                end_line = line_number + 1
+                if total_chars >= 100_000:
+                    truncated = True
+                    break
+        if not selected:
+            return f"file: {path} (no lines in requested range; total not scanned)", False
+        header = f"file: {path} (lines {start_line + 1}-{end_line}; total not scanned)"
+        output = header + "\n" + "\n".join(selected)
+        if truncated:
+            output += "\n[truncated: file read output limit reached]"
+        return output, False
     except Exception as e:
         return f"error: {e}", True
 
@@ -388,8 +554,8 @@ def tool_write(alberto, args: Dict) -> Tuple[str, bool]:
         if final_content != content:
             content = final_content  # redacted
         path = safe_path
-    except ImportError:
-        pass
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing write: {e}", True
     except Exception as e:
         return f"NemoClaw check failed: {e}", True
     try:
@@ -410,30 +576,46 @@ def tool_edit(alberto, args: Dict) -> Tuple[str, bool]:
     new = args.get("new_text", "")
     if not path or not old:
         return "path and old_text required", True
-    # NemoClaw pre-write check on the new text
+    # Preserve the existing edit contract: reject secrets in new_text rather
+    # than silently changing the requested replacement. Then enforce path checks.
     try:
         from .nemoclaw_real import scan_secrets
         secrets = scan_secrets(new)
         if secrets:
-            names = list({s["pattern"] for s in secrets})
+            names = list({item["pattern"] for item in secrets})
             return f"NemoClaw blocked edit: new_text contains secrets ({', '.join(names)})", True
-        from .nemoclaw_real import safe_resolve_path, PathViolation
-        safe_path = safe_resolve_path(path)
-    except ImportError:
-        safe_path = path
-        secrets = []
-    except PathViolation as e:
-        return f"NemoClaw blocked: {e}", True
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing edit: {e}", True
+    # Validate the target before reading, then validate the resulting content
+    # before writing, using the same sandbox root as the other protected tools.
     try:
+        from .nemoclaw_real import nemoclaw_pre_write_check
+        allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+        if not allowed:
+            return f"NemoClaw blocked: {safe_path}", True
         p = Path(safe_path).expanduser()
+    except ImportError as e:
+        return f"NemoClaw security policy unavailable; refusing edit: {e}", True
+    except Exception as e:
+        return f"NemoClaw check failed: {e}", True
+    try:
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
         if old not in content:
             return f"old_text not found in {path}", True
         new_content = content.replace(old, new, 1)
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), new_content)
+            if not allowed:
+                return f"NemoClaw blocked: {final_path}", True
+            p = Path(final_path).expanduser()
+            new_content = final_content
+        except ImportError:
+            pass
         p.write_text(new_content)
-        return f"edited {path} ({len(content)} -> {len(new_content)} bytes)", False
+        return f"edited {p} ({len(content)} -> {len(new_content)} bytes)", False
     except Exception as e:
         return f"error: {e}", True
 
@@ -460,62 +642,253 @@ def tool_glob(alberto, args: Dict) -> Tuple[str, bool]:
         return f"error: {e}", True
 
 
+GREP_MAX_FILES = 1000
+GREP_MAX_FILE_BYTES = 5 * 1024 * 1024
+GREP_MAX_TOTAL_BYTES = 50 * 1024 * 1024
+
+
 @register_tool("grep")
 def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo grep.ts equivalent — search file contents for a regex pattern.
-    Args: pattern (str), path (str, default '.'), max_results (int, default 50)."""
+    """Search sandbox files with strict path and resource bounds."""
     import re as _re
     pattern = args.get("pattern", "")
     base = args.get("path", ".")
-    max_results = int(args.get("max_results", 50))
-    if not pattern:
-        return "no pattern", True
+    raw_max_results = args.get("max_results", 50)
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 1000:
+        return "invalid pattern: expected a non-empty string up to 1000 characters", True
+    if isinstance(raw_max_results, bool):
+        return "invalid max_results: expected an integer from 1 to 200", True
+    try:
+        max_results = int(raw_max_results)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid max_results: expected an integer from 1 to 200", True
+    if str(raw_max_results).strip() != str(max_results) or not 1 <= max_results <= 200:
+        return "invalid max_results: expected an integer from 1 to 200", True
     try:
         base_p = Path(base).expanduser()
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file search", True
+        sandbox_root = Path(sandbox.home()).resolve()
+        try:
+            base_p = safe_resolve_path(str(base_p), sandbox_root=sandbox_root)
+            base_p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: search path must remain inside configured sandbox ({exc})", True
+        if is_protected_path(str(base_p)):
+            return "BLOCKED by NemoClaw: protected search path", True
         if not base_p.exists():
             return f"path not found: {base}", True
         try:
             regex = _re.compile(pattern)
-        except _re.error as e:
-            return f"invalid regex: {e}", True
+        except _re.error as exc:
+            return f"invalid regex: {exc}", True
+
         matches = []
-        for f in base_p.rglob("*"):
-            if not f.is_file():
+        scanned_files = 0
+        scanned_bytes = 0
+        truncated = False
+        for file_path in base_p.rglob("*"):
+            if not file_path.is_file():
                 continue
-            try:
-                content = f.read_text(errors="replace")
-            except Exception:
-                continue
-            for i, line in enumerate(content.splitlines(), 1):
-                if regex.search(line):
-                    matches.append(f"{f}:{i}: {line[:200]}")
-                    if len(matches) >= max_results:
-                        break
-            if len(matches) >= max_results:
+            scanned_files += 1
+            if scanned_files > GREP_MAX_FILES:
+                truncated = True
                 break
-        if not matches:
+            try:
+                resolved_file = file_path.resolve()
+                resolved_file.relative_to(sandbox_root)
+                if is_protected_path(str(file_path)) or is_protected_path(str(resolved_file)):
+                    continue
+                size = resolved_file.stat().st_size
+                if size > GREP_MAX_FILE_BYTES:
+                    continue
+                with resolved_file.open("r", encoding="utf-8", errors="replace") as stream:
+                    for line_number, line in enumerate(stream, 1):
+                        scanned_bytes += len(line.encode("utf-8", errors="replace"))
+                        if scanned_bytes > GREP_MAX_TOTAL_BYTES:
+                            truncated = True
+                            break
+                        if regex.search(line):
+                            matches.append(f"{file_path}:{line_number}: {line.rstrip()[:200]}")
+                            if len(matches) >= max_results:
+                                break
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if len(matches) >= max_results or truncated:
+                break
+
+        output = "\\n".join(matches)
+        if truncated:
+            output = (output + "\\n" if output else "") + (
+                f"[search truncated: resource limit reached; scanned at most "
+                f"{GREP_MAX_FILES} files / {GREP_MAX_TOTAL_BYTES} bytes]"
+            )
+        if not matches and not truncated:
             return f"no matches for /{pattern}/ in {base}", False
-        return "\n".join(matches), False
-    except Exception as e:
-        return f"error: {e}", True
+        return output, False
+    except Exception as exc:
+        return f"error: {exc}", True
+
+
+def _validate_public_web_url(url: str):
+    """Validate an HTTP(S) URL and reject private, local, and reserved targets."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid URL: {exc}") from exc
+
+    if scheme not in ("http", "https"):
+        raise ValueError("only http and https URLs are allowed")
+    if not hostname:
+        raise ValueError("URL must include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing credentials are not allowed")
+    if port is not None and port not in (80, 443):
+        raise ValueError("only ports 80 and 443 are allowed")
+    if hostname == "localhost" or hostname.endswith(
+        (".localhost", ".local", ".localdomain", ".internal", ".test", ".lan", ".home.arpa")
+    ):
+        raise ValueError("local or internal hostnames are not allowed")
+
+    _resolve_public_web_addresses(
+        hostname, port or (443 if scheme == "https" else 80)
+    )
+    return parsed
+
+
+def _resolve_public_web_addresses(hostname: str, port: int) -> List[str]:
+    """Resolve a host once for a connection and reject any non-public result.
+
+    The returned numeric addresses are used for the socket connection itself,
+    preventing urllib from resolving the hostname a second time after checks.
+    """
+    import ipaddress
+    import socket
+
+    try:
+        literal = ipaddress.ip_address(hostname)
+        addresses = [literal]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise ValueError(f"hostname resolution failed: {exc}") from exc
+        addresses = []
+        for info in infos:
+            try:
+                addresses.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
+            except ValueError:
+                continue
+
+    if not addresses:
+        raise ValueError("hostname did not resolve to an IP address")
+    if any(not address.is_global for address in addresses):
+        raise ValueError("URL resolves to a non-public IP address")
+    return [str(address) for address in addresses]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connect to a validated numeric IP, never a second hostname resolution."""
+
+    def connect(self):
+        import socket
+        addresses = _resolve_public_web_addresses(self.host, self.port or 80)
+        last_error = None
+        for address in addresses:
+            try:
+                self.sock = socket.create_connection(
+                    (address, self.port or 80), self.timeout, self.source_address
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise OSError("no usable public address")
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Pin the TCP destination while retaining TLS SNI and hostname validation."""
+
+    def connect(self):
+        import socket
+        addresses = _resolve_public_web_addresses(self.host, self.port or 443)
+        last_error = None
+        for address in addresses:
+            raw_sock = None
+            try:
+                raw_sock = socket.create_connection(
+                    (address, self.port or 443), self.timeout, self.source_address
+                )
+                self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+                return
+            except OSError as exc:
+                last_error = exc
+                if raw_sock is not None:
+                    raw_sock.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError("no usable public address")
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=self._context,
+            check_hostname=self._check_hostname,
+        )
+
+
+class _SafeWebRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate every redirect to prevent redirects into local networks."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from urllib.parse import urljoin
+        _validate_public_web_url(urljoin(req.full_url, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 @register_tool("webfetch")
 def tool_webfetch(alberto, args: Dict) -> Tuple[str, bool]:
-    """MiMo webfetch.ts equivalent — fetch a URL and return text content.
-    Args: url (str), max_length (int, default 5000)."""
+    """Fetch public HTTP(S) text content with SSRF and response-size checks."""
     url = args.get("url", "")
-    max_length = int(args.get("max_length", 5000))
     if not url:
         return "no url", True
     try:
         import urllib.request
+        max_length = max(1, min(int(args.get("max_length", 5000)), 100000))
+        _validate_public_web_url(url)
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8", errors="replace")
+        # Disable environment proxies: the pinning connection handlers must
+        # own the actual destination socket for SSRF validation to be meaningful.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(),
+            _PinnedHTTPSHandler(),
+            _SafeWebRedirectHandler(),
+        )
+        with opener.open(req, timeout=30) as response:
+            raw = response.read(max_length * 4 + 1)
+        content = raw.decode("utf-8", errors="replace")
         return content[:max_length], False
     except Exception as e:
-        return f"error fetching {url}: {e}", True
+        return f"error fetching URL: {e}", True
 
 
 @register_tool("websearch")
@@ -556,7 +929,16 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
     if not path or not edits:
         return "path and edits required", True
     try:
-        p = Path(path).expanduser()
+        # Validate the target before reading it, then re-check the final content
+        # before writing. This keeps multiedit aligned with the protected write tools.
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, safe_path, _ = nemoclaw_pre_write_check(alberto, path, "")
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {safe_path}", True
+            p = Path(safe_path).expanduser()
+        except ImportError:
+            p = Path(path).expanduser()
         if not p.exists():
             return f"file not found: {path}", True
         content = p.read_text()
@@ -567,112 +949,217 @@ def tool_multiedit(alberto, args: Dict) -> Tuple[str, bool]:
             if old and old in content:
                 content = content.replace(old, new, 1)
                 applied += 1
+        try:
+            from .nemoclaw_real import nemoclaw_pre_write_check
+            allowed, final_path, final_content = nemoclaw_pre_write_check(alberto, str(p), content)
+            if not allowed:
+                return f"BLOCKED by NemoClaw: {final_path}", True
+            p = Path(final_path).expanduser()
+            content = final_content
+        except ImportError:
+            pass
         p.write_text(content)
-        return f"applied {applied}/{len(edits)} edits to {path}", applied != len(edits)
+        return f"applied {applied}/{len(edits)} edits to {p}", applied != len(edits)
     except Exception as e:
         return f"error: {e}", True
 
 
 @register_tool("apply_patch")
 def tool_apply_patch(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL patch applier using Hermes patch_parser (v4a format).
-
-    Hermes patch_parser supports:
-    - v4a format with @@ hunks
-    - OperationType (add/delete/replace/rename)
-    - PatchOperation dataclass with file_path, hunks
-
-    Args: path (str), patch (str, the v4a patch text).
-    """
+    """Apply a V4A patch with validate-before-write semantics and path confinement."""
     p_str = args.get("path", "")
     patch = args.get("patch", "")
     if not p_str or not patch:
         return "path and patch required", True
-    # Real Hermes path_security check
-    safe, reason, blocked = _bridge_path_security(p_str)
-    if blocked:
-        return f"Hermes path_security blocked: {reason}", True
+
     try:
+        try:
+            from .nemoclaw_real import is_protected_path
+            if is_protected_path(p_str):
+                return f"BLOCKED by NemoClaw protected-path policy: {p_str}", True
+        except ImportError:
+            pass
+        safe, reason, blocked = _bridge_path_security(p_str)
+        if blocked:
+            return f"BLOCKED by Hermes path_security: {reason}", True
+
         from .upstream_bridge import _get
-        mod = _get("patch_parser")
-        if mod is not None and hasattr(mod, "parse_v4a_patch"):
-            operations, error = mod.parse_v4a_patch(patch)
-            if error:
-                return f"patch parse error: {error}", True
-            if not operations:
-                return "no operations in patch", True
-            results = []
-            for op in operations:
-                file_path = op.new_path or op.file_path
-                content_parts = []
-                for hunk in op.hunks:
-                    for line in hunk.lines:
-                        prefix = line.prefix
-                        if prefix in ("+", " "):
-                            content_parts.append(line.content + "\n")
-                if content_parts:
-                    target = Path(p_str).parent / file_path if not Path(file_path).is_absolute() else Path(file_path)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text("".join(content_parts))
-                    results.append(f"wrote {target}")
-            return "\n".join(results), False
-        # Fallback parser
-        import re as _re_apply
-        hunk_re = _re_apply.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
-        patch_lines = patch.splitlines()
-        pi = 0
-        out = []
-        while pi < len(patch_lines):
-            line = patch_lines[pi]
-            m = hunk_re.match(line)
-            if m:
-                pi += 1
-                while pi < len(patch_lines) and not patch_lines[pi].startswith("@@"):
-                    pl = patch_lines[pi]
-                    if pl.startswith("+"):
-                        out.append(pl[1:] + "\n")
-                    elif pl.startswith("-"):
-                        pass
-                    elif pl.startswith(" "):
-                        out.append(pl[1:] + "\n")
-                    pi += 1
+        parser = _get("patch_parser")
+        if parser is None:
+            # The parser is vendored in the repository. Load it directly as a
+            # fail-safe when the optional upstream registry is unavailable.
+            import importlib
+            from .upstream_bridge import UPSTREAM_ROOT
+            hermes_root = str(UPSTREAM_ROOT / "hermes")
+            if hermes_root not in sys.path:
+                sys.path.insert(0, hermes_root)
+            try:
+                parser = importlib.import_module("tools.patch_parser")
+            except Exception:
+                parser = None
+        if parser is None or not hasattr(parser, "parse_v4a_patch") or not hasattr(parser, "apply_v4a_operations"):
+            return "V4A patch parser is unavailable; no files were modified", True
+
+        operations, parse_error = parser.parse_v4a_patch(patch)
+        if parse_error:
+            return f"patch parse error: {parse_error}", True
+        if not operations:
+            # Backward compatibility: accept a unified hunk when the target
+            # path is supplied separately (older Alberto callers use this form).
+            from pathlib import Path as _PatchPath
+            import re as _patch_re
+            hunks = []
+            current_hunk = None
+            for line in patch.splitlines():
+                if line.startswith("@@"):
+                    if current_hunk is not None and current_hunk.lines:
+                        hunks.append(current_hunk)
+                    hint_match = _patch_re.match(r"@@\s*(.+?)\s*@@", line)
+                    hint = hint_match.group(1) if hint_match else None
+                    current_hunk = parser.Hunk(context_hint=hint)
+                    continue
+                if current_hunk is None or not line:
+                    continue
+                if line.startswith("\\"):
+                    continue
+                if line.startswith("+"):
+                    current_hunk.lines.append(parser.HunkLine("+", line[1:]))
+                elif line.startswith("-"):
+                    current_hunk.lines.append(parser.HunkLine("-", line[1:]))
+                elif line.startswith(" "):
+                    current_hunk.lines.append(parser.HunkLine(" ", line[1:]))
+            if current_hunk is not None and current_hunk.lines:
+                hunks.append(current_hunk)
+            if hunks:
+                operations = [parser.PatchOperation(
+                    operation=parser.OperationType.UPDATE,
+                    file_path=_PatchPath(p_str).name,
+                    hunks=hunks,
+                )]
             else:
-                pi += 1
-        if out:
-            p = Path(p_str).expanduser()
-            p.write_text("".join(out))
-            return f"patched {p_str} (fallback parser)", False
-        return "no usable hunks in patch", True
+                return "no usable patch operations", True
+
+        from types import SimpleNamespace
+        base_dir = Path(p_str).expanduser().resolve().parent
+
+        class _SafePatchFileOps:
+            """Filesystem adapter that confines every operation to the target directory."""
+
+            def _resolve(self, raw_path: str) -> Path:
+                raw = Path(raw_path).expanduser()
+                candidate = raw if raw.is_absolute() else base_dir / raw
+                resolved = candidate.resolve()
+                try:
+                    resolved.relative_to(base_dir)
+                except ValueError as exc:
+                    raise ValueError(f"patch path escapes target directory: {raw_path}") from exc
+                try:
+                    from .nemoclaw_real import is_protected_path
+                    if is_protected_path(str(resolved)):
+                        raise PermissionError(f"BLOCKED by NemoClaw protected-path policy: {resolved}")
+                except ImportError:
+                    pass
+                allowed, why, is_blocked = _bridge_path_security(str(resolved))
+                if is_blocked:
+                    raise PermissionError(f"BLOCKED by Hermes path policy: {resolved}: {why}")
+                return resolved
+
+            def read_file_raw(self, path: str):
+                try:
+                    target = self._resolve(path)
+                    if not target.is_file():
+                        return SimpleNamespace(content="", error=f"file not found: {path}")
+                    return SimpleNamespace(content=target.read_text(encoding="utf-8"), error=None)
+                except Exception as exc:
+                    return SimpleNamespace(content="", error=str(exc))
+
+            def write_file(self, path: str, file_content: str):
+                try:
+                    target = self._resolve(path)
+                    try:
+                        from .nemoclaw_real import nemoclaw_pre_write_check
+                        allowed, final_path, final_content = nemoclaw_pre_write_check(
+                            alberto, str(target), file_content
+                        )
+                        if not allowed:
+                            return SimpleNamespace(error=f"blocked by NemoClaw: {final_path}")
+                        target = Path(final_path).expanduser().resolve()
+                        target.relative_to(base_dir)
+                        file_content = final_content
+                    except ImportError:
+                        pass
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(file_content, encoding="utf-8")
+                    return SimpleNamespace(error=None, lsp_diagnostics=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+            def delete_file(self, path: str):
+                try:
+                    target = self._resolve(path)
+                    if not target.is_file():
+                        return SimpleNamespace(error=f"file not found: {path}")
+                    target.unlink()
+                    return SimpleNamespace(error=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+            def move_file(self, source: str, destination: str):
+                try:
+                    src = self._resolve(source)
+                    dst = self._resolve(destination)
+                    if not src.is_file():
+                        return SimpleNamespace(error=f"source file not found: {source}")
+                    if dst.exists():
+                        return SimpleNamespace(error=f"destination already exists: {destination}")
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    src.replace(dst)
+                    return SimpleNamespace(error=None)
+                except Exception as exc:
+                    return SimpleNamespace(error=str(exc))
+
+        result = parser.apply_v4a_operations(operations, _SafePatchFileOps())
+        if not result.success:
+            return f"patch failed: {result.error or 'unknown patch error'}", True
+        summary = "patched: " + (result.diff or "patch applied")
+        if result.files_modified or result.files_created or result.files_deleted:
+            summary += (
+                f"\nmodified={result.files_modified}"
+                f"\ncreated={result.files_created}"
+                f"\ndeleted={result.files_deleted}"
+            )
+        return summary, False
     except Exception as e:
-        return f"error: {e}", True
+        return f"error applying patch: {type(e).__name__}: {e}", True
 
 
 @register_tool("change_directory")
 def tool_change_directory(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL persistent cwd — stored in ~/.alberto/cwd and applied to all subprocesses.
-
-    Args: path (str).
-    """
+    """Set a persistent working directory confined to the configured sandbox."""
     new_path = args.get("path", "")
     if not new_path:
         return "no path", True
-    # Real Hermes path_security check
-    safe, reason, blocked = _bridge_path_security(new_path)
-    if blocked:
-        return f"Hermes path_security blocked: {reason}", True
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        return "a configured sandbox is required for directory changes", True
     try:
-        p = Path(new_path).expanduser().resolve()
-        if not p.exists():
-            return f"path not found: {new_path}", True
-        # Store in alberto state
-        alberto._cwd = str(p)
-        # Persist to ~/.alberto/cwd
-        cwd_file = Path.home() / ".alberto" / "cwd"
+        home = Path(sandbox.home()).resolve()
+        requested = Path(str(new_path)).expanduser()
+        candidate = requested if requested.is_absolute() else home / requested
+        candidate = candidate.resolve()
+        try:
+            candidate.relative_to(home)
+        except ValueError:
+            return "directory path escapes sandbox home", True
+        if not candidate.exists() or not candidate.is_dir():
+            return f"directory not found inside sandbox: {new_path}", True
+        alberto._cwd = str(candidate)
+        cwd_file = home / ".alberto" / "cwd"
         cwd_file.parent.mkdir(parents=True, exist_ok=True)
-        cwd_file.write_text(str(p))
-        return f"cwd changed to {p} (persisted)", False
+        cwd_file.write_text(str(candidate), encoding="utf-8")
+        return f"working directory set to {candidate}", False
     except Exception as e:
-        return f"error: {e}", True
+        return f"directory change failed: {type(e).__name__}: {e}", True
 
 
 @register_tool("task")
@@ -829,45 +1316,57 @@ def tool_question(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("skill")
 def tool_skill(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL skill loader — lists, shows, and runs skills from the catalog.
-
-    Actions:
-    - run (default): invoke a skill with input
-    - list: show all available skills
-    - show: show a skill's content
-    - search: search skills by keyword
-
-    Args: name (str), input (str, optional), action (str, default 'run').
-    """
+    """List, show, search, or execute skills through Alberto's configured sandbox."""
     name = args.get("name", "")
     inp = args.get("input", "")
     action = args.get("action", "run")
     try:
         from .skill_engine import list_skills, get_skill_content, run_skill
+
         if action == "list":
             skills = list_skills()
-            return "\n".join(skills[:100]) if skills else "(no skills)", False
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills[:100]
+            ]
+            return "\n".join(labels) if labels else "(no skills)", False
+
         if action == "show":
             if not name:
                 return "name required for show", True
             content = get_skill_content(name)
-            return content[:3000] if content else f"skill {name} not found", not content
+            return (content[:3000] if content else f"skill {name} not found"), not bool(content)
+
         if action == "search":
             if not name:
                 return "name required for search", True
             skills = list_skills()
-            matches = [s for s in skills if name.lower() in s.lower()][:30]
+            labels = [
+                str(item.get("name") or item.get("id") or item) if isinstance(item, dict)
+                else str(item)
+                for item in skills
+            ]
+            matches = [item for item in labels if name.lower() in item.lower()][:30]
             return "\n".join(matches) if matches else f"no matches for '{name}'", False
-        # Default: run
+
         if not name:
             return "no skill name", True
-        result = run_skill(alberto, name, inp)
-        return f"skill {name} executed: {json.dumps(result, default=str)[:1000]}", False
+        try:
+            skill_args = shlex.split(inp)
+        except ValueError as e:
+            return f"invalid skill argument quoting: {e}", True
+        result = run_skill(
+            name,
+            skill_args,
+            sandbox=getattr(alberto, "sandbox", None),
+        )
+        output = f"skill {name}: {json.dumps(result, default=str)[:1000]}"
+        return output, not bool(result.get("ok"))
     except ImportError:
         return "skill_engine not available", True
     except Exception as e:
         return f"skill {name} failed: {e}", True
-
 
 @register_tool("workflow")
 def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
@@ -910,66 +1409,80 @@ def tool_workflow(alberto, args: Dict) -> Tuple[str, bool]:
 
 @register_tool("actor")
 def tool_actor(alberto, args: Dict) -> Tuple[str, bool]:
-    """REAL persistent shell session — preserves cwd and env across calls.
-
-    Each session is a directory under ~/.alberto/actor_sessions/<session>/
-    with .cwd and .env files. Commands are executed via subprocess with
-    the persistent cwd and env.
-
-    Args: command (str), session (str, default 'default'),
-          action (str: 'run'|'reset'|'list_sessions', default 'run').
-    """
+    """Run persistent actor sessions inside Alberto's configured sandbox."""
     cmd = args.get("command", "")
-    session = args.get("session", "default")
-    action = args.get("action", "run")
-    # Sessions live in ~/.alberto/actor_sessions/
-    sessions_root = Path.home() / ".alberto" / "actor_sessions"
-    sessions_root.mkdir(parents=True, exist_ok=True)
-    session_dir = sessions_root / session
-    session_dir.mkdir(exist_ok=True)
-    cwd_file = session_dir / "cwd"
-    env_file = session_dir / "env"
-    history_file = session_dir / "history.log"
-    if action == "list_sessions":
-        sessions = [d.name for d in sessions_root.iterdir() if d.is_dir()]
-        return "\n".join(sessions) if sessions else "(no sessions)", False
-    if action == "reset":
-        import shutil
-        shutil.rmtree(session_dir)
-        session_dir.mkdir(exist_ok=True)
-        return f"session {session} reset", False
-    if not cmd:
-        return "no command", True
-    # Real Hermes tirith_security check
-    safe, reason, blocked = _bridge_tirith_security(cmd)
-    if blocked:
-        return f"Hermes tirith blocked: {reason}", True
-    # Load persistent cwd/env
-    cwd = cwd_file.read_text().strip() if cwd_file.exists() else str(Path.cwd())
-    env = os.environ.copy()
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                env[k] = v
-    # Append to history
-    with open(history_file, "a") as f:
-        f.write(f"$ {cmd}\n")
+    session = str(args.get("session", "default"))
+    action = str(args.get("action", "run")).strip().lower()
+
+    if action == "run":
+        if not isinstance(cmd, str) or not cmd.strip():
+            return "no command", True
+        blocked_match = _BLOCKED_RE.search(cmd)
+        if blocked_match:
+            try:
+                from . import audit
+                audit.log_blocked_shell(cmd, blocked_match.group(0))
+            except ImportError:
+                pass
+            return f"BLOCKED by Alberto security: matches '{blocked_match.group(0)}'", True
+        safe, reason, blocked = _bridge_tirith_security(cmd)
+        if blocked:
+            return f"Hermes tirith blocked: {reason}", True
+    elif action not in ("reset", "list_sessions"):
+        return f"unknown actor action: {action}", True
+
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "run", None)) or not callable(getattr(sandbox, "home", None)):
+        return "a configured sandbox is required for actor execution", True
+
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                          timeout=60, cwd=cwd, env=env)
-        # Update cwd if it changed
-        new_cwd = os.getcwd() if cmd.startswith("cd ") else cwd
-        if new_cwd != cwd:
-            cwd_file.write_text(new_cwd)
-        # Append output to history
-        with open(history_file, "a") as f:
-            f.write((r.stdout or "") + (r.stderr or "") + "\n")
-        return f"[actor:{session} cwd={new_cwd}] exit={r.returncode}\n{(r.stdout or '')[:1500]}", r.returncode != 0
-    except subprocess.TimeoutExpired:
-        return f"[actor:{session}] timeout after 60s", True
+        sandbox_home = Path(sandbox.home()).resolve()
+        sessions_root = (sandbox_home / ".alberto" / "actor_sessions").resolve()
+        sessions_root.relative_to(sandbox_home)
+        sessions_root.mkdir(parents=True, exist_ok=True)
+
+        session_dir = (sessions_root / session).resolve()
+        try:
+            session_dir.relative_to(sessions_root)
+        except ValueError:
+            return "actor session path escapes sandbox", True
+        if session_dir == sessions_root:
+            return "invalid actor session name", True
+
+        if action == "list_sessions":
+            sessions = [d.name for d in sessions_root.iterdir() if d.is_dir()]
+            return "\n".join(sessions) if sessions else "(no sessions)", False
+        if action == "reset":
+            import shutil
+            if session_dir.exists():
+                shutil.rmtree(session_dir)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            return f"session {session} reset", False
+
+        session_dir.mkdir(parents=True, exist_ok=True)
+        cwd_file = session_dir / "cwd"
+        history_file = session_dir / "history.log"
+        cwd = sandbox_home
+        if cwd_file.exists():
+            try:
+                requested = Path(cwd_file.read_text(encoding="utf-8").strip())
+                requested = requested if requested.is_absolute() else sandbox_home / requested
+                requested = requested.resolve()
+                requested.relative_to(sandbox_home)
+                if requested.is_dir():
+                    cwd = requested
+            except (OSError, ValueError):
+                cwd = sandbox_home
+
+        with history_file.open("a", encoding="utf-8") as history:
+            history.write(f"$ {cmd}\n")
+        result = sandbox.run(["bash", "-lc", cmd], timeout=60, cwd=cwd)
+        output = (result.stdout or "") + (result.stderr or "")
+        with history_file.open("a", encoding="utf-8") as history:
+            history.write(output + "\n")
+        return f"[actor:{session} cwd={cwd} exit={result.returncode}]\n{output[:1500]}", result.returncode != 0
     except Exception as e:
-        return f"error: {e}", True
+        return f"actor sandbox execution failed: {type(e).__name__}: {e}", True
 
 
 @register_tool("lsp")
@@ -1679,26 +2192,55 @@ def run_tool_loop(alberto, messages: List[Dict], *,
                   max_tokens: int = 4096, temperature: float = 0.7) -> Dict:
     """Run an agent loop: call LLM with tools, execute tool_calls, repeat.
 
-    Returns the final response dict with conversation history.
+    Returns the final response dict with conversation history. Invalid provider
+    responses fail closed with a structured error instead of escaping as an
+    IndexError/AttributeError or being silently converted into an empty answer.
     """
-    tools = get_tool_schemas()
     history = list(messages)  # copy
     iterations = 0
     final_content = ""
     final_tool_calls = []
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
+        return {
+            "error": "max_iterations must be a positive integer",
+            "iterations": 0, "history": history, "final_content": "",
+            "tool_calls": [],
+        }
 
+    tools = get_tool_schemas()
+
+    def loop_error(message: str) -> Dict:
+        return {
+            "error": message,
+            "iterations": iterations,
+            "history": history,
+            "final_content": final_content,
+            "tool_calls": final_tool_calls,
+        }
+
+    limit_reached = False
     while iterations < max_iterations:
         iterations += 1
         try:
             resp = alberto.router.invoke(task, history, tools=tools, tool_choice="auto",
                                         max_tokens=max_tokens, temperature=temperature)
         except Exception as e:
-            return {"error": f"router.invoke failed: {e}", "iterations": iterations,
-                    "history": history, "final_content": final_content}
+            return loop_error(f"router.invoke failed: {type(e).__name__}: {e}")
 
-        msg = resp.get("choices", [{}])[0].get("message", {})
+        if not isinstance(resp, dict):
+            return loop_error("router.invoke returned invalid response: expected an object")
+        choices = resp.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            return loop_error("router.invoke returned invalid response: choices must contain an object")
+        msg = choices[0].get("message")
+        if not isinstance(msg, dict):
+            return loop_error("router.invoke returned invalid response: message must be an object")
         content = msg.get("content") or ""
+        if not isinstance(content, str):
+            return loop_error("router.invoke returned invalid response: message content must be a string")
         tool_calls = msg.get("tool_calls") or []
+        if not isinstance(tool_calls, list) or any(not isinstance(tc, dict) for tc in tool_calls):
+            return loop_error("router.invoke returned invalid response: tool_calls must be a list of objects")
 
         # Add assistant message to history
         history.append({
@@ -1708,37 +2250,45 @@ def run_tool_loop(alberto, messages: List[Dict], *,
         })
 
         if not tool_calls:
-            # LLM is done, no more tools
             final_content = content
-            # Don't reset final_tool_calls here — keep history
             break
 
         # Execute each tool call
         final_tool_calls.extend(tool_calls)
         for tc in tool_calls:
             fn = tc.get("function", {})
+            if not isinstance(fn, dict):
+                fn = {}
             name = fn.get("name", "")
             raw_args = fn.get("arguments", "{}")
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except Exception:
-                args = {}
-            output, is_error = execute_tool(alberto, name, args)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                output, is_error = (f"invalid tool arguments JSON: {exc}", True)
+            else:
+                if not isinstance(args, dict):
+                    output, is_error = ("invalid tool arguments: expected a JSON object", True)
+                else:
+                    output, is_error = execute_tool(alberto, name, args)
             history.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
-                "content": f"[{name} {'ERROR' if is_error else 'OK'}]\n{output[:2000]}",
+                "content": f"[{name} {'ERROR' if is_error else 'OK'}]\n{str(output)[:2000]}",
             })
     else:
-        # Hit max_iterations
-        final_content = history[-1].get("content", "") if history else "[max iterations reached]"
+        limit_reached = True
+        # Do not return the last tool result as if it were the model's final answer.
+        final_content = "[max iterations reached]"
 
-    return {
+    result = {
         "iterations": iterations,
         "history": history,
         "final_content": final_content,
         "tool_calls": final_tool_calls,
     }
+    if limit_reached:
+        result["error"] = "max_iterations reached before the model returned a final answer"
+    return result
 
 
 # ===================== MiMo name aliases (hyphenated names) =====================
