@@ -16,9 +16,9 @@ Capabilities depend on installed optional components, provider credentials, netw
 
 ## MiMo application generation
 
-The `mimo_app_create` tool connects MiMo's `spec → tdd → review` planning pipeline to the application scaffolder. It refuses to create the scaffold if a planning step fails and confines tool-created projects to the sandbox's `apps` directory. The current scaffold is deterministic React/Vite + FastAPI boilerplate; **MiMo planning does not yet mean arbitrary model-generated source files are materialized**. Model output is not executed as code. This distinction is intentional until generated-code validation, dependency allowlisting, build/test gates, and isolated execution are implemented.
+The `mimo_app_create` tool uses MiMo's `spec → tdd → review` planning pipeline, then asks the configured MiMo engine to generate the application source. The generated manifest must contain exactly two files: `frontend/src/App.tsx` and `backend/main.py`. The tool rejects malformed manifests, unexpected paths, oversized source files, non-allowlisted imports, invalid Python syntax, prohibited dynamic-code operations, and a failed source review. It writes generated source only after these gates pass.
 
-The standalone `alberto app create` command still creates the deterministic scaffold directly. Use the MiMo tool through Alberto's tool-calling path when you want the specification, test plan, and security review included.
+This is a constrained generation path, not arbitrary autonomous code execution. The tool keeps the scaffold's dependency manifests fixed and **does not execute generated source**. The generated frontend is not yet verified by a real Node/Vite build, and the generated backend is not started automatically; validate both in an isolated disposable environment before deployment. The standalone `alberto app create` command remains a deterministic scaffold generator.
 
 ## Installation
 
@@ -87,6 +87,7 @@ The application must fail to initialize if Docker isolation cannot be establishe
 ### Additional execution controls
 
 - Treat downloaded or locally installed skills as executable code. Review provenance and permissions before enabling them.
+- Learner-generated skills under `skills/user` require explicit operator approval before execution. Set `ALBERTO_ALLOW_UNTRUSTED_SKILL_EXECUTION=1` only after reviewing the skill source; this does not replace Docker isolation or least privilege.
 - Do not treat shell-command blocklists as a complete security boundary.
 - Keep provider keys and other secrets outside skill workspaces and child-process environments where possible.
 - Use least-privilege service accounts, filesystem restrictions, network egress controls, resource limits, timeouts, and disposable workspaces.
@@ -150,7 +151,7 @@ For a more stable comparison, run multiple repeats under the same provider, mode
 
 ## Current verification and known limits
 
-- Latest completed CI run verified on Python 3.11: **791 passed, 2 skipped, 7 deselected**. The coverage job measured **47% combined line/branch coverage** across `alberto/` (7,955 statements; 3,916 missed; 2,618 branches; 341 partial branches). This is not directly comparable to the older **28% line-only** baseline. The Codecov upload was rate-limited (HTTP 429), but the local CI coverage report and `coverage.xml` were generated successfully. See [CI run 38525052373](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38525052373). Coverage remains below the 100% project goal. Later hardening commits are pending their own CI validation; the 47% figure applies to this completed run only.
+- Last fully confirmed green CI before the current hardening batch: **897 passed, 2 skipped, 7 deselected**, with **51% combined line/branch coverage** on Python 3.11. See [CI run 38702416355](https://github.com/GrupoANDevelopment-m/alberto-ai/actions/runs/38702416355). This figure predates the latest MiMo-generation, dependency-planning, and skill-approval changes; their coverage must be measured by the current CI run before updating the baseline. Codecov returned HTTP 429, but the local coverage report was generated. The project goal remains 100% coverage; the final live-LLM conversation test is intentionally gated on closing critical gaps and meeting that goal.
 - The CI suite deliberately skips or deselects provider/network-dependent tests. Those integrations require separate, credentialed end-to-end verification.
 - Security changes include fail-closed shell execution when no sandbox is configured, sandbox-confined directory changes, safer patch application, sandbox-backed skill execution, SSRF-focused URL checks, enforcement of `ALBERTO_REQUIRE_DOCKER` at agent initialization, path confinement for extension installation/registry/uninstall/skill creation, rejection of built-in skill source traversal and plaintext HTTP Git sources, provider URL validation before credentials are sent, and production-mode API authentication with error redaction.
 - The app performance tester now rejects invalid request/concurrency inputs, refuses non-local endpoint forms, and reports request failures as a failed benchmark instead of a false success. The watchdog server launcher defaults to loopback and sends the configured API token on its local health checks.
