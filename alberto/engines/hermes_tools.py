@@ -1687,21 +1687,17 @@ def _mimo_distill(alberto, args):
 
 
 def _nemoclaw_sandbox(alberto, args):
-    """NemoClaw sandbox management."""
+    """Report that sandbox operations are unavailable until a real NemoClaw adapter exists."""
     action = args.get("action", "list")
     name = args.get("name", "alberto-ai")
-    # NemoClaw manages sandboxes via its CLI which requires Docker+OpenShell
-    # We expose the intent and provide install instructions
     return {
-        "ok": True,
+        "ok": False,
+        "available": False,
         "sandbox": name,
         "action": action,
-        "note": "NemoClaw sandbox requires Docker + OpenShell installed on host",
-        "install": "git clone https://github.com/NVIDIA/NemoClaw && cd NemoClaw && bash install.sh",
-        "current": {
-            "kind": type(alberto.sandbox).__name__,
-            "home": str(alberto.sandbox.home()),
-        }
+        "error": "NemoClaw sandbox operations are not wired to the host CLI; no operation was performed",
+        "requirements": ["Docker", "NemoClaw", "OpenShell"],
+        "install": "https://github.com/NVIDIA/NemoClaw",
     }
 
 
@@ -1718,47 +1714,45 @@ def _nemoclaw_policy(alberto, args):
         if p.exists():
             return {"ok": True, "preset": preset, "policy": p.read_text()[:2000]}
         return {"ok": False, "error": f"preset {preset} not found"}
-    return {"ok": True, "action": action, "note": "use NemoClaw CLI on host to apply policies"}
+    return {"ok": False, "available": False, "action": action,
+            "error": "NemoClaw policy changes are not wired to the host CLI; no policy was applied"}
 
 
 def _nemoclaw_shields(alberto, args):
-    """NemoClaw security shields status."""
-    # Real implementation lives in nemoclaw/src/commands/shields-status.ts
-    # We call its TypeScript via subprocess (requires npx/node on host)
+    """Fail closed when live NemoClaw shield status cannot be queried."""
     return {
-        "ok": True,
-        "shields": {
-            "secrets_scanner": "active",
-            "path_traversal": "active",
-            "ssrf_guard": "active",
-            "blueprint_state": "active",
-        },
-        "note": "shields run inside the NemoClaw daemon",
+        "ok": False,
+        "available": False,
+        "error": "NemoClaw shield status adapter is not implemented; shield state is unknown",
+        "shields": None,
+        "note": "No shield was verified as active by this tool",
     }
 
 
 def _nemoclaw_inference(alberto, args):
-    """NemoClaw inference providers (NVIDIA/local)."""
+    """Report provider configuration as unknown until queried from NemoClaw."""
     return {
-        "ok": True,
-        "providers": ["nvidia", "local-inference", "openai", "anthropic"],
-        "default": "nvidia",
-        "note": "configure via pluginConfig.inference in openclaw.plugin.json",
+        "ok": False,
+        "available": False,
+        "error": "NemoClaw inference configuration adapter is not implemented; configured providers are unknown",
+        "providers": None,
+        "default": None,
+        "note": "No inference provider configuration was read or changed",
     }
 
 
 def _nemoclaw_backup(alberto, args):
-    """NemoClaw backup/restore/upgrade."""
+    """Fail closed: backup, restore, and upgrade must not claim success without execution."""
     action = args.get("action", "backup")
-    target = args.get("target", "")
-    if action == "backup":
-        return {"ok": True, "action": "backup", "target": target or "/sandbox/.mimo",
-                "note": "backs up the agent home, including .mimo, .aiox-squads, .hermes"}
-    if action == "restore":
-        return {"ok": True, "action": "restore", "target": target}
-    if action == "upgrade":
-        return {"ok": True, "action": "upgrade", "note": "pulls latest NemoClaw + rebuilds image"}
-    return {"ok": False, "error": f"action {action} not supported"}
+    if action not in {"backup", "restore", "upgrade"}:
+        return {"ok": False, "error": f"action {action} not supported"}
+    return {
+        "ok": False,
+        "available": False,
+        "action": action,
+        "target": args.get("target"),
+        "error": f"NemoClaw {action} is not implemented by this adapter; no operation was performed",
+    }
 
 
 def _nemoclaw_blueprint(alberto, args):
@@ -1780,7 +1774,7 @@ def _nemoclaw_blueprint(alberto, args):
         if bp_yaml.exists():
             return {"ok": True, "yaml": bp_yaml.read_text()[:5000]}
         return {"ok": False, "error": "blueprint.yaml not found"}
-    return {"ok": True, "action": action}
+    return {"ok": False, "error": f"action {action} not supported"}
 
 
 def _aiox_squad(alberto, args):
