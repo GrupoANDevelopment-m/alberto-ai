@@ -1573,8 +1573,13 @@ def _mimo_app_create(alberto, args):
             root = (node.module or "").split(".", 1)[0]
             if root not in allowed_import_roots or node.level:
                 return {"ok": False, "error": "generated backend contains a non-allowlisted import"}
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile", "__import__"}:
-            return {"ok": False, "error": "generated backend contains a prohibited dynamic-code operation"}
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {
+            "eval", "exec", "compile", "__import__", "getattr", "setattr", "globals",
+            "locals", "vars", "open", "breakpoint",
+        }:
+            return {"ok": False, "error": "generated backend contains a prohibited dynamic-code or host-access operation"}
+        elif isinstance(node, ast.Name) and node.id == "__builtins__":
+            return {"ok": False, "error": "generated backend may not introspect builtins"}
     if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FastAPI"
                for node in ast.walk(tree)):
         return {"ok": False, "error": "generated backend must construct a FastAPI application"}
@@ -1600,9 +1605,13 @@ def _mimo_app_create(alberto, args):
         )
         if not created.get("ok"):
             return created
-        app_dir = Path(created["path"]).resolve()
+        raw_app_dir = Path(created["path"])
+        app_dir = raw_app_dir.resolve()
         if app_dir.parent != destination or app_dir.name != name:
-            shutil.rmtree(app_dir, ignore_errors=True)
+            # Never recursively delete a resolved path that escaped the output root.
+            if (not raw_app_dir.is_symlink() and raw_app_dir.name == name
+                    and raw_app_dir.parent.resolve() == destination):
+                shutil.rmtree(raw_app_dir, ignore_errors=True)
             return {"ok": False, "error": "created app path escaped the validated output directory"}
         for relative, source in sources.items():
             target = (app_dir / relative).resolve()
@@ -1612,7 +1621,10 @@ def _mimo_app_create(alberto, args):
     except Exception as exc:
         try:
             if "created" in locals() and isinstance(created, dict) and created.get("ok") and created.get("path"):
-                shutil.rmtree(Path(created["path"]), ignore_errors=True)
+                candidate = Path(created["path"])
+                if (not candidate.is_symlink() and candidate.name == name
+                        and candidate.parent.resolve() == destination):
+                    shutil.rmtree(candidate, ignore_errors=True)
         except Exception:
             pass
         return {"ok": False, "error": f"app materialization failed: {type(exc).__name__}"}
