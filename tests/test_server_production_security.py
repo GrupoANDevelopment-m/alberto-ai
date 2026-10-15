@@ -118,3 +118,40 @@ def test_memory_search_endpoint_enforces_limit_bounds(monkeypatch, tmp_path):
     response = client.get("/api/memory/search?q=hello&limit=20")
     assert response.status_code == 200
     assert calls == [("hello", 20)]
+
+
+
+def test_model_router_render_env_never_exposes_credential(monkeypatch):
+    from alberto.model_router import ModelConfig, ModelRouter, ModelSpec
+
+    secret = "test-secret-that-must-not-leak"
+    monkeypatch.setenv("ALBERTO_TEST_MODEL_KEY", secret)
+    router = ModelRouter(ModelConfig(tasks={
+        "chat": ModelSpec(
+            provider="test", model_id="test-model",
+            base_url="https://models.example.test",
+            credential_env="ALBERTO_TEST_MODEL_KEY",
+        )
+    }))
+
+    env = router.render_env("chat")
+
+    assert env["OPENAI_API_KEY"] == "***"
+    assert secret not in repr(env)
+    monkeypatch.delenv("ALBERTO_TEST_MODEL_KEY")
+    assert router.render_env("chat")["OPENAI_API_KEY"] == ""
+
+
+def test_model_test_endpoint_redacts_secret_even_if_agent_returns_raw_key(monkeypatch, tmp_path):
+    secret = "raw-api-secret-that-must-not-leak"
+    agent = SimpleNamespace(model_test=lambda _task: {
+        "OPENAI_API_KEY": secret,
+        "LLM_MODEL": "test-model",
+    })
+    app = make_app(monkeypatch, tmp_path, alberto=agent)
+
+    response = TestClient(app).get("/api/model/test?task=chat")
+
+    assert response.status_code == 200
+    assert response.json()["OPENAI_API_KEY"] == "***"
+    assert secret not in response.text

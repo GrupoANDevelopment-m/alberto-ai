@@ -320,7 +320,11 @@ def create_app(alberto: Optional[Alberto] = None,
         env = app.state.alberto.model_test(task)
         if not env:
             raise HTTPException(404, f"no model configured for task {task!r}")
-        return env
+        # Defense in depth: diagnostics may report credential presence, never its value.
+        safe_env = dict(env)
+        if "OPENAI_API_KEY" in safe_env:
+            safe_env["OPENAI_API_KEY"] = "***" if safe_env["OPENAI_API_KEY"] else ""
+        return safe_env
 
     # ===== Hermes =====
     @app.post("/api/hermes/browser")

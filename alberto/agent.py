@@ -314,14 +314,15 @@ class Alberto:
                 ] + messages[-1:]
                 messages = messages_with_ctx
 
-            # Add smart router decision
-            messages = messages + [{"role": "system", "content": route_ctx}]
+            # Keep the current user turn last; route/system context after it can
+            # confuse message ordering and weaken the actual request.
+            messages = messages[:-1] + [{"role": "system", "content": route_ctx}, messages[-1]]
 
             # Detect if we're on fallback model (gemma4) — needs Mavis takeover
             on_fallback = is_fallback_model(self)
             if on_fallback:
                 mavis_ctx = get_mavis_takeover_prompt()
-                messages = messages + [{"role": "system", "content": mavis_ctx}]
+                messages = messages[:-1] + [{"role": "system", "content": mavis_ctx}, messages[-1]]
 
             if strat.mode == "squad" and strat.squad:
                 # Squad mode: run the pipeline, but also include the LLM-generated summary as natural response

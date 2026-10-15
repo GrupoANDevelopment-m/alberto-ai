@@ -115,7 +115,7 @@ def cmd_model(args, alberto: Alberto) -> int:
             print(f"no model configured for task '{args.task}'")
             return 1
         for k, v in env.items():
-            masked = v if k != "OPENAI_API_KEY" else v[:6] + "***"
+            masked = ("***" if v else "") if k == "OPENAI_API_KEY" else v
             print(f"{k}={masked}")
     return 0
 

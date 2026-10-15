@@ -154,3 +154,77 @@ def test_run_squad_falls_back_to_template_when_output_formatting_fails():
 
     result = agent.run_squad("template", "task")
     assert result["outputs"]["analysis"] == "ok"
+
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_chat_keeps_user_turn_last_after_injecting_system_context(monkeypatch, fallback):
+    import alberto.agent as agent_module
+    import alberto.runtime.smart_router_v2 as smart_router_v2
+    import alberto.runtime.skill_engine as skill_engine
+    from alberto.conversation import Conversation
+
+    agent = Alberto.__new__(Alberto)
+    conversation = Conversation(id="chat-contract", started_at=1.0)
+
+    class Store:
+        def get(self, conversation_id):
+            return conversation if conversation_id == conversation.id else None
+
+        def latest_active(self, max_age_seconds=600):
+            return None
+
+        def create(self):
+            return conversation
+
+        def save(self, value):
+            assert value is conversation
+
+    agent.conversations = Store()
+    agent.catalog = SimpleNamespace(active_squad=None)
+    agent.mimo = SimpleNamespace(goal_get=lambda: None)
+    strategy = SimpleNamespace(
+        mode="solo", squad=None, task_routing="chat", engine="router", reason="test"
+    )
+    agent.orchestrator = SimpleNamespace(
+        decide=lambda prompt, active_squad: strategy
+    )
+    captured = {}
+
+    def invoke(task, messages, **kwargs):
+        captured["messages"] = messages
+        return {"choices": [{"message": {"content": "answer"}}]}
+
+    agent.router = SimpleNamespace(invoke=invoke)
+    agent._build_integration_context = lambda: "INTEGRATION_CONTEXT"
+    agent._supports_function_calling = lambda: False
+
+    monkeypatch.setattr(agent_module, "detect_intent", lambda prompt: {})
+    monkeypatch.setattr(agent_module, "recall_memory", lambda _agent, _prompt: "")
+    monkeypatch.setattr(agent_module, "ALBERTO_SYSTEM_PROMPT", lambda _agent: "PERSONA")
+    monkeypatch.setattr(agent_module, "build_catalog_block", lambda _agent: "CATALOG")
+    monkeypatch.setattr(
+        agent_module, "build_messages",
+        lambda conv, **kwargs: [
+            {"role": "system", "content": "PERSONA"},
+            {"role": "user", "content": conv.turns[-1].content},
+        ],
+    )
+    monkeypatch.setattr(smart_router_v2, "route_intent", lambda _prompt: {"route": "chat"})
+    monkeypatch.setattr(smart_router_v2, "build_route_prompt", lambda _route: "ROUTE_CONTEXT")
+    monkeypatch.setattr(skill_engine, "auto_invoke_skill", lambda _prompt: None)
+    monkeypatch.setattr(agent_module, "is_fallback_model", lambda _agent: fallback)
+    monkeypatch.setattr(agent_module, "get_mavis_takeover_prompt", lambda: "MAVIS_CONTEXT")
+
+    result = agent.chat("inspect this repository", conversation_id="chat-contract")
+    messages = captured["messages"]
+
+    if fallback:
+        assert "MAVIS FALLBACK MODE" in result["response"]
+    else:
+        assert result["response"] == "answer"
+    assert messages[-1] == {"role": "user", "content": "inspect this repository"}
+    system_contents = [m["content"] for m in messages[:-1] if m["role"] == "system"]
+    assert "INTEGRATION_CONTEXT" in system_contents
+    assert "ROUTE_CONTEXT" in system_contents
+    assert ("MAVIS_CONTEXT" in system_contents) is fallback

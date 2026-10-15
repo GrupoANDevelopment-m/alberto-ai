@@ -124,3 +124,21 @@ class TestCLIHandlersInProcess:
 
         assert cmd_model(SimpleNamespace(action="test", task="chat"), FakeAlberto()) == 1
         assert "no model configured" in capsys.readouterr().out
+
+
+
+def test_cli_model_test_never_prints_api_secret(capsys):
+    from types import SimpleNamespace
+    from alberto.cli import cmd_model
+
+    secret = "super-secret-api-key"
+
+    class FakeAlberto:
+        def model_test(self, task):
+            assert task == "chat"
+            return {"OPENAI_API_KEY": secret, "LLM_MODEL": "test-model"}
+
+    assert cmd_model(SimpleNamespace(action="test", task="chat"), FakeAlberto()) == 0
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert "OPENAI_API_KEY=***" in output
