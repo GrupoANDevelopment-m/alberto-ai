@@ -19,7 +19,7 @@ def make_learner(tmp_path):
 
 @pytest.mark.parametrize("name", [
     "../escape", "../../tmp/escape", "/tmp/escape", "has space", "UPPER", ".", "",
-    "a" * 65, "name\\\\nested", "name/child",
+    "a" * 65, "name\\\nested", "name/child",
 ])
 def test_create_skill_rejects_invalid_or_traversal_names(tmp_path, name):
     learner = make_learner(tmp_path)
@@ -30,15 +30,15 @@ def test_create_skill_rejects_invalid_or_traversal_names(tmp_path, name):
 
 def test_create_skill_quotes_frontmatter_scalars_and_keeps_metadata_structure(tmp_path):
     learner = make_learner(tmp_path)
-    description = 'safe description\\nmetadata:\\n  attacker: "injected"'
-    category = 'user\\n    injected: true'
+    description = 'safe description\nmetadata:\n  attacker: "injected"'
+    category = 'user\n    injected: true'
     path = learner.create_skill(
         "valid_skill", description=description, content="body",
         category=category, tags=["normal", 'tag, with punctuation'], author='author: injected',
     )
     import yaml
     text = path.read_text(encoding="utf-8")
-    frontmatter = text.split("---\\n", 2)[1]
+    frontmatter = text.split("---\n", 2)[1]
     parsed = yaml.safe_load(frontmatter)
     assert parsed["description"] == description
     assert parsed["metadata"]["alberto"]["category"] == category
@@ -75,7 +75,7 @@ def test_evolve_skill_refuses_skill_outside_user_directory(tmp_path, monkeypatch
     learner = make_learner(tmp_path)
     external = tmp_path / "other" / "SKILL.md"
     external.parent.mkdir()
-    external.write_text("---\\nname: external\\nversion: 0.1.0\\n---\\nbody", encoding="utf-8")
+    external.write_text("---\nname: external\nversion: 0.1.0\n---\nbody", encoding="utf-8")
     import alberto.runtime.skill_engine as engine
     monkeypatch.setattr(engine, "find_skill", lambda name: external)
     with pytest.raises(ValueError, match="only user-created skills"):
