@@ -136,23 +136,23 @@ class Learner:
         }
         # Emit quoted scalar values so user text cannot break YAML structure.
         body = (
-            "---\\n"
-            f"name: {self._yaml_scalar(frontmatter['name'])}\\n"
-            f"description: {self._yaml_scalar(frontmatter['description'])}\\n"
-            f"version: {self._yaml_scalar(frontmatter['version'])}\\n"
-            f"author: {self._yaml_scalar(frontmatter['author'])}\\n"
-            f"license: {self._yaml_scalar(frontmatter['license'])}\\n"
-            "metadata:\\n"
-            "  alberto:\\n"
-            f"    category: {self._yaml_scalar(category)}\\n"
-            f"    tags: {json.dumps(safe_tags, ensure_ascii=False)}\\n"
-            "    created_by: learner\\n"
-            "---\\n\\n"
-            f"# {name}\\n\\n{description}\\n\\n{content}\\n"
+            "---\n"
+            f"name: {self._yaml_scalar(frontmatter['name'])}\n"
+            f"description: {self._yaml_scalar(frontmatter['description'])}\n"
+            f"version: {self._yaml_scalar(frontmatter['version'])}\n"
+            f"author: {self._yaml_scalar(frontmatter['author'])}\n"
+            f"license: {self._yaml_scalar(frontmatter['license'])}\n"
+            "metadata:\n"
+            "  alberto:\n"
+            f"    category: {self._yaml_scalar(category)}\n"
+            f"    tags: {json.dumps(safe_tags, ensure_ascii=False)}\n"
+            "    created_by: learner\n"
+            "---\n\n"
+            f"# {name}\n\n{description}\n\n{content}\n"
         )
         if code_blocks:
             for block in code_blocks:
-                body += f"\\n\u0060\u0060\u0060{block.get('lang', 'bash')}\\n{block['code']}\\n\u0060\u0060\u0060\\n"
+                body += f"\n\u0060\u0060\u0060{block.get('lang', 'bash')}\n{block['code']}\n\u0060\u0060\u0060\n"
         skill_md = resolved_target / "SKILL.md"
         skill_md.write_text(body, encoding="utf-8")
         return skill_md
