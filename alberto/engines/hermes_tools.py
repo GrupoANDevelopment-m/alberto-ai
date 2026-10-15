@@ -251,6 +251,12 @@ def tool_mcp(alberto, args):
         server = args.get("server", "")
         tool_name = args.get("tool", "")
         tool_args = args.get("args", {})
+        if not isinstance(server, str) or not server.strip() or len(server) > 200:
+            return {"ok": False, "error": "MCP invoke requires a valid server name"}
+        if not isinstance(tool_name, str) or not tool_name.strip() or len(tool_name) > 200:
+            return {"ok": False, "error": "MCP invoke requires a valid tool name"}
+        if not isinstance(tool_args, dict):
+            return {"ok": False, "error": "MCP tool args must be an object"}
         mod = _try_import("mcp_tool")
         if mod is not None:
             for fn_name in ("invoke", "call", "call_tool"):
