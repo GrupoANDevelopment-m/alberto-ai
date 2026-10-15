@@ -49,14 +49,13 @@ def safe_resolve_path(path: str, sandbox_root: Optional[Path] = None) -> Path:
     Raises:
         PathViolation: if path escapes sandbox or is host-protected
     """
-    sandbox_root = sandbox_root or SANDBOX_ROOT
+    sandbox_root = Path(sandbox_root or SANDBOX_ROOT).resolve()
     if not path:
         raise PathViolation("empty path")
 
     # Resolve every relative path and enforce containment after resolving.
     # Do not special-case IDENTITY.md or memory/: '..' and symlinks can
     # otherwise escape the sandbox through those previously trusted prefixes.
-    sandbox_root = Path(sandbox_root).resolve()
     if not path.startswith("/"):
         candidate = (sandbox_root / path).resolve()
         _check_in_sandbox(candidate, sandbox_root)
