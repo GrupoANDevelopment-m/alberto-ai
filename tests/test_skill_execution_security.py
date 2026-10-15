@@ -264,3 +264,28 @@ def test_generated_user_skill_symlink_escape_is_rejected(tmp_path, monkeypatch):
     result = skill_engine.run_skill("linked-skill", [])
     assert result["ok"] is False
     assert "symlinked skill paths" in result["error"] or "escapes the user skills directory" in result["error"]
+
+
+def test_auto_invoke_does_not_route_to_missing_skill(monkeypatch):
+    monkeypatch.setattr(
+        skill_engine, "SKILL_KEYWORDS",
+        [{"patterns": [r"\\bdeploy\\b"], "skill": "missing-deploy-skill", "description": "deployment"}],
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda _name: None)
+
+    assert skill_engine.auto_invoke_skill("deploy this app") is None
+
+
+def test_auto_invoke_routes_only_to_resolvable_skill(monkeypatch, tmp_path):
+    skill_path = tmp_path / "deploy" / "SKILL.md"
+    monkeypatch.setattr(
+        skill_engine, "SKILL_KEYWORDS",
+        [{"patterns": [r"\\bdeploy\\b"], "skill": "deploy-skill", "description": "deployment"}],
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda name: skill_path if name == "deploy-skill" else None)
+
+    result = skill_engine.auto_invoke_skill("deploy this app")
+
+    assert result is not None
+    assert result["skill"] == "deploy-skill"
+    assert result["description"] == "deployment"
