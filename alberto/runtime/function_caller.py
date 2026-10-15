@@ -649,13 +649,30 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
     import re as _re
     pattern = args.get("pattern", "")
     base = args.get("path", ".")
-    max_results = int(args.get("max_results", 50))
-    if not pattern:
-        return "no pattern", True
+    raw_max_results = args.get("max_results", 50)
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 1000:
+        return "invalid pattern: expected a non-empty string up to 1000 characters", True
+    if isinstance(raw_max_results, bool):
+        return "invalid max_results: expected an integer from 1 to 200", True
+    try:
+        max_results = int(raw_max_results)
+    except (TypeError, ValueError, OverflowError):
+        return "invalid max_results: expected an integer from 1 to 200", True
+    if str(raw_max_results).strip() != str(max_results) or not 1 <= max_results <= 200:
+        return "invalid max_results: expected an integer from 1 to 200", True
     try:
         base_p = Path(base).expanduser()
-        from .nemoclaw_real import is_protected_path
-        if is_protected_path(str(base_p)) or is_protected_path(str(base_p.resolve())):
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file search", True
+        sandbox_root = Path(sandbox.home()).resolve()
+        try:
+            base_p = safe_resolve_path(str(base_p), sandbox_root=sandbox_root)
+            base_p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: search path must remain inside configured sandbox ({exc})", True
+        if is_protected_path(str(base_p)):
             return "BLOCKED by NemoClaw: protected search path", True
         if not base_p.exists():
             return f"path not found: {base}", True
@@ -668,10 +685,12 @@ def tool_grep(alberto, args: Dict) -> Tuple[str, bool]:
             if not f.is_file():
                 continue
             try:
-                # Skip sensitive targets, including symlinks that resolve to them.
-                if is_protected_path(str(f)) or is_protected_path(str(f.resolve())):
+                # Do not follow file symlinks outside the configured workspace.
+                resolved_file = f.resolve()
+                resolved_file.relative_to(sandbox_root)
+                if is_protected_path(str(f)) or is_protected_path(str(resolved_file)):
                     continue
-                content = f.read_text(errors="replace")
+                content = resolved_file.read_text(errors="replace")
             except Exception:
                 continue
             for i, line in enumerate(content.splitlines(), 1):
