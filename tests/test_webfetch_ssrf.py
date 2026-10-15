@@ -101,7 +101,7 @@ def test_webfetch_bounds_response_read_and_output(monkeypatch):
 
     opener = FakeOpener()
     monkeypatch.setattr(function_caller, "_validate_public_web_url", lambda url: None)
-    monkeypatch.setattr(function_caller.urllib.request, "build_opener", lambda handler: opener)
+    monkeypatch.setattr(function_caller.urllib.request, "build_opener", lambda *handlers: opener)
 
     output, is_error = function_caller.tool_webfetch(
         None, {"url": "https://example.com/", "max_length": 10}
@@ -110,3 +110,50 @@ def test_webfetch_bounds_response_read_and_output(monkeypatch):
     assert is_error is False
     assert output == "x" * 10
     assert opener.response.requested_size == 41
+
+
+
+def test_pinned_http_connection_uses_validated_numeric_address(monkeypatch):
+    calls = []
+    fake_socket = object()
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))
+        ],
+    )
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        calls.append(address)
+        return fake_socket
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    connection = function_caller._PinnedHTTPConnection("rebind.example", timeout=1)
+    connection.connect()
+
+    assert calls == [("93.184.216.34", 80)]
+    assert connection.sock is fake_socket
+
+
+def test_pinned_http_connection_rejects_private_dns_result_before_connect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))
+        ],
+    )
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *args, **kwargs: calls.append(args) or object(),
+    )
+    connection = function_caller._PinnedHTTPConnection("rebind.example", timeout=1)
+
+    with pytest.raises(ValueError, match="non-public"):
+        connection.connect()
+
+    assert calls == []
