@@ -227,6 +227,45 @@ class TestHermesToolFailClosedContracts:
         assert result["ok"] is False
         assert "unsupported MCP action" in result["error"]
 
+    def test_browser_fallback_uses_pinned_connections_and_disables_proxies(self, monkeypatch):
+        import urllib.request
+        from alberto.engines import hermes_tools as tools
+        from alberto.runtime import function_caller
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                return b"<html>safe</html>"
+
+        class FakeOpener:
+            def open(self, request, timeout):
+                assert request.full_url == "https://example.com/"
+                assert timeout == 30
+                return FakeResponse()
+
+        captured = {}
+        monkeypatch.setattr(tools, "_try_import", lambda _name: None)
+        monkeypatch.setattr(function_caller, "_validate_public_web_url", lambda _url: None)
+        monkeypatch.setattr(
+            urllib.request,
+            "build_opener",
+            lambda *handlers: (captured.setdefault("handlers", handlers) and FakeOpener()),
+        )
+
+        result = tools.tool_browser(None, {"url": "https://example.com/"})
+        assert result["ok"] is True
+        assert result["text"] == "safe"
+        handlers = captured["handlers"]
+        assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies == {} for h in handlers)
+        assert any(isinstance(h, function_caller._PinnedHTTPHandler) for h in handlers)
+        assert any(isinstance(h, function_caller._PinnedHTTPSHandler) for h in handlers)
+        assert any(isinstance(h, function_caller._SafeWebRedirectHandler) for h in handlers)
+
     @pytest.mark.parametrize("timeout", [True, False, 0, -1, 121, 1.5, "invalid", None])
     def test_code_execution_rejects_invalid_timeout_before_sandbox(self, timeout):
         from alberto.engines.hermes_tools import tool_code_execution
