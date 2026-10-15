@@ -55,9 +55,11 @@ class MCPClient:
     @staticmethod
     def _valid_server_config(name: Any, cfg: Any) -> bool:
         """Validate persisted MCP entries before they enter the runtime registry."""
-        if not isinstance(name, str) or not name.strip() or not isinstance(cfg, dict):
+        if not isinstance(name, str) or not name.strip() or name != name.strip() or not isinstance(cfg, dict):
             return False
         transport = cfg.get("transport", "stdio")
+        if not isinstance(transport, str):
+            return False
         command = cfg.get("command")
         args = cfg.get("args", [])
         env = cfg.get("env", {})
