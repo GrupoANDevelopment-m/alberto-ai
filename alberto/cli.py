@@ -328,32 +328,11 @@ def cmd_skill(args, alberto):
             print(f"\n--- block {i+1} ({b['lang']}) ---")
             print(b["code"][:400])
     elif a == "run-all" and args.skill_args:
-        from alberto.runtime.skill_engine import find_skill, extract_code_blocks, substitute_args
-        import subprocess
-        path = find_skill(args.skill_args[0])
-        if not path:
-            print(f"skill '{args.skill_args[0]}' not found", file=sys.stderr)
-            return 1
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        rargs = args.skill_args[1:]
-        for i, b in enumerate(blocks):
-            if b["lang"] not in ("bash", "sh", "shell", "python", "python3", "py"):
-                continue
-            code = substitute_args(b["code"], rargs)
-            print(f"\n--- block {i+1} ({b['lang']}) ---")
-            try:
-                if b["lang"] in ("python", "python3", "py"):
-                    cmd = [sys.executable, "-c", code]
-                else:
-                    cmd = ["bash", "-c", code]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
-                if result.stdout:
-                    print(result.stdout, end="")
-                if result.stderr:
-                    print(result.stderr, end="", file=sys.stderr)
-            except subprocess.TimeoutExpired:
-                print(f"timeout after {args.timeout}s", file=sys.stderr)
+        # Delegate to the security-hardened skill engine. A second execution
+        # implementation here could bypass its sandbox and approval policy.
+        from alberto.runtime.skill_engine import main as skill_main
+        return skill_main(["run-all", *args.skill_args, "--timeout", str(args.timeout)])
+
     return 0
 
 
