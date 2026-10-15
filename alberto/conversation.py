@@ -57,10 +57,14 @@ class Conversation:
         return self.turns[-1].at if self.turns else self.started_at
 
     def history_for_llm(self, *, max_turns: int = 20) -> List[Dict[str, str]]:
-        out = []
-        for t in self.turns[-max_turns:]:
-            out.append({"role": t.role, "content": t.content})
-        return out
+        if not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 0:
+            raise ValueError("max_turns must be a non-negative integer")
+        if max_turns == 0:
+            return []
+        return [
+            {"role": t.role, "content": t.content}
+            for t in self.turns[-max_turns:]
+        ]
 
 
 class ConversationStore:
@@ -77,16 +81,47 @@ class ConversationStore:
             return
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return
+        if not isinstance(raw, dict):
             return
         for cid, c in raw.items():
+            if not isinstance(cid, str) or not isinstance(c, dict):
+                continue
+            raw_turns = c.get("turns", [])
+            turns = []
+            if isinstance(raw_turns, list):
+                for item in raw_turns:
+                    if not isinstance(item, dict):
+                        continue
+                    role, text = item.get("role"), item.get("content")
+                    if not isinstance(role, str) or not isinstance(text, str):
+                        continue
+                    at = item.get("at", time.time())
+                    if not isinstance(at, (int, float)) or isinstance(at, bool):
+                        at = time.time()
+                    meta = item.get("meta", {})
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    tool = item.get("tool")
+                    if tool is not None and not isinstance(tool, str):
+                        tool = None
+                    turns.append(Turn(role=role, content=text, at=float(at), tool=tool, meta=meta))
+            started_at = c.get("started_at", time.time())
+            if not isinstance(started_at, (int, float)) or isinstance(started_at, bool):
+                started_at = time.time()
+            persona = c.get("persona", "alberto")
+            if not isinstance(persona, str):
+                persona = "alberto"
+            active_squad = c.get("active_squad")
+            active_goal = c.get("active_goal")
             self._data[cid] = Conversation(
                 id=cid,
-                started_at=c.get("started_at", time.time()),
-                turns=[Turn(**t) for t in c.get("turns", [])],
-                persona=c.get("persona", "alberto"),
-                active_squad=c.get("active_squad"),
-                active_goal=c.get("active_goal"),
+                started_at=float(started_at),
+                turns=turns,
+                persona=persona,
+                active_squad=active_squad if isinstance(active_squad, str) else None,
+                active_goal=active_goal if isinstance(active_goal, str) else None,
             )
 
     def _save(self) -> None:
