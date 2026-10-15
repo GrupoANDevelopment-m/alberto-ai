@@ -289,3 +289,27 @@ def test_auto_invoke_routes_only_to_resolvable_skill(monkeypatch, tmp_path):
     assert result is not None
     assert result["skill"] == "deploy-skill"
     assert result["description"] == "deployment"
+
+
+def test_main_cli_run_all_delegates_to_sandbox_hardened_engine(monkeypatch, capsys):
+    from alberto import cli
+
+    calls = []
+    monkeypatch.setattr(
+        "alberto.runtime.skill_engine.main",
+        lambda argv: calls.append(argv) or 1,
+    )
+
+    result = cli.cmd_skill(
+        SimpleNamespace(
+            skill_action="run-all",
+            skill_args=["sample", "argument with spaces", "--flag"],
+            timeout=17,
+        ),
+        SimpleNamespace(),
+    )
+
+    assert result == 1
+    assert calls == [[
+        "run-all", "sample", "argument with spaces", "--flag", "--timeout", "17"
+    ]]
