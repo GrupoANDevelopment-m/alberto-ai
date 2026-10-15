@@ -3,7 +3,7 @@ name: CI
 # Alberto AI v1.8 CI pipeline (closes G-O1)
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, audit/integrated-hardening]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -106,7 +106,7 @@ jobs:
 
   live-agent-conversation:
     # Run manually only: never expose provider credentials to pull-request code.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/audit/integrated-hardening' && contains(github.event.head_commit.message, '[run-live-nvidia-test]'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
