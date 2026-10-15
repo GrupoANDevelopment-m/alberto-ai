@@ -164,6 +164,10 @@ def test_pinned_https_connection_pins_ip_but_keeps_tls_hostname(monkeypatch):
     tls_socket = object()
 
     class FakeTLSContext:
+        # http.client.HTTPSConnection inspects these before connect().
+        verify_mode = 2  # ssl.CERT_REQUIRED
+        check_hostname = True
+
         def wrap_socket(self, sock, server_hostname):
             assert sock is raw_socket
             calls.append(("tls_hostname", server_hostname))
