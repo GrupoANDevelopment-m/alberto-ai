@@ -1741,6 +1741,14 @@ def _mimo_worktree(alberto, args):
         if check.returncode != 0:
             return {"ok": False, "error": "invalid git branch name",
                     "stderr": (check.stderr or "")[:500]}
+        # Create the destination parent inside the sandbox; never mutate host
+        # paths directly, even when the sandbox is a local/container adapter.
+        if target_rel.parent.parts:
+            mkdir_result = sandbox.run(["mkdir", "-p", str(target_rel.parent)],
+                                       timeout=10, cwd=repo)
+            if mkdir_result.returncode != 0:
+                return {"ok": False, "error": "could not create worktree parent inside sandbox",
+                        "stderr": (mkdir_result.stderr or "")[:500]}
         result = sandbox.run(["git", "worktree", "add", "-b", branch, str(target_rel)],
                              timeout=60, cwd=repo)
         return {"ok": result.returncode == 0, "stdout": result.stdout or "",
