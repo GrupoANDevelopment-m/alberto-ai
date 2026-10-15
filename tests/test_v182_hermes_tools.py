@@ -438,3 +438,21 @@ class TestMiMoHermesToolContracts:
         }
         assert calls == [("max", "solve", 4), ("compose", "app", ["spec", "review"])]
 
+def test_mimo_checkpoint_honors_explicit_session_id_when_session_list_is_empty():
+    from types import SimpleNamespace
+    from alberto.engines.hermes_tools import _mimo_session
+
+    calls = []
+    class Mimo:
+        def session_list(self):
+            return []
+        def checkpoint(self, sid, *, note=""):
+            calls.append((sid, note))
+            return "saved"
+
+    result = _mimo_session(SimpleNamespace(mimo=Mimo()), {
+        "action": "checkpoint", "session_id": "remote-session", "note": "manual id"
+    })
+    assert result == {"ok": True, "checkpoint": "saved"}
+    assert calls == [("remote-session", "manual id")]
+
