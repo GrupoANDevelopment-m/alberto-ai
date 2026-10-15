@@ -133,8 +133,13 @@ def tool_browser(alberto, args):
     try:
         ctx = ssl.create_default_context()
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
+        # Match webfetch's pinned-connection policy. URL validation alone is
+        # insufficient if urllib resolves the hostname again during connect.
+        from ..runtime.function_caller import _PinnedHTTPHandler, _PinnedHTTPSHandler
         opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=ctx),
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(),
+            _PinnedHTTPSHandler(context=ctx),
             _SafeWebRedirectHandler(),
         )
         with opener.open(req, timeout=30) as resp:
