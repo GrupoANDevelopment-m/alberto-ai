@@ -320,3 +320,121 @@ class TestHermesToolFailClosedContracts:
         })
         assert result == {"ok": True, "result": {"content": "ok"}}
         assert calls == [("filesystem", "read", {"path": "README.md"})]
+
+class TestMiMoHermesToolContracts:
+    """Exercise the Hermes-to-MiMo tool adapters without calling a live provider."""
+
+    def test_mimo_session_create_list_checkpoint_and_empty_checkpoint(self):
+        from types import SimpleNamespace
+        from alberto.engines.hermes_tools import _mimo_session
+
+        calls = []
+        class Mimo:
+            def session_create(self, *, goal=None):
+                calls.append(("create", goal))
+                return SimpleNamespace(id="s-1", started_at="now", goal=goal)
+            def session_list(self):
+                return [{"id": "s-1"}]
+            def checkpoint(self, sid, *, note=""):
+                calls.append(("checkpoint", sid, note))
+                return {"saved": True}
+
+        mimo = Mimo()
+        assert _mimo_session(SimpleNamespace(mimo=mimo), {"goal": "build"}) == {
+            "ok": True, "session": "s-1", "started_at": "now", "goal": "build"
+        }
+        assert _mimo_session(SimpleNamespace(mimo=mimo), {"action": "list"}) == {
+            "ok": True, "sessions": [{"id": "s-1"}]
+        }
+        assert _mimo_session(SimpleNamespace(mimo=mimo), {
+            "action": "checkpoint", "session_id": "s-1", "note": "stable"
+        }) == {"ok": True, "checkpoint": {"saved": True}}
+        assert calls == [("create", "build"), ("checkpoint", "s-1", "stable")]
+
+        class EmptyMimo:
+            def session_list(self):
+                return []
+        empty = _mimo_session(SimpleNamespace(mimo=EmptyMimo()), {"action": "checkpoint"})
+        assert empty == {"ok": False, "error": "no session_id and no sessions"}
+        assert _mimo_session(SimpleNamespace(mimo=mimo), {"action": "unknown"}) == {
+            "ok": False, "error": "action unknown not implemented"
+        }
+
+    def test_mimo_memory_supports_all_actions_and_legacy_inference(self):
+        from types import SimpleNamespace
+        from alberto.engines.hermes_tools import _mimo_memory
+
+        calls = []
+        class Mimo:
+            def memory_set(self, key, value, *, tags=None):
+                calls.append(("set", key, value, tags))
+            def memory_get(self, key):
+                return "value:" + key
+            def memory_search(self, query):
+                return [query]
+            def memory_list(self):
+                return [{"key": "k"}]
+            def memory_delete(self, key):
+                return key == "k"
+            def distill(self):
+                return {"items": 2}
+
+        agent = SimpleNamespace(mimo=Mimo())
+        assert _mimo_memory(agent, {"action": "set", "key": "k", "value": "v", "tags": ["t"]}) == {"ok": True, "key": "k"}
+        assert _mimo_memory(agent, {"action": "get", "key": "k"}) == {"ok": True, "value": "value:k"}
+        assert _mimo_memory(agent, {"action": "search", "query": "needle"}) == {"ok": True, "results": ["needle"]}
+        assert _mimo_memory(agent, {}) == {"ok": True, "entries": [{"key": "k"}]}
+        assert _mimo_memory(agent, {"action": "delete", "key": "k"}) == {"ok": True}
+        assert _mimo_memory(agent, {"action": "distill"}) == {"ok": True, "distilled": {"items": 2}}
+        assert _mimo_memory(agent, {"key": "legacy", "value": "v"}) == {"ok": True, "key": "legacy"}
+        assert _mimo_memory(agent, {"action": "unknown"}) == {"ok": False, "error": "action unknown not supported"}
+        assert calls == [("set", "k", "v", ["t"]), ("set", "legacy", "v", None)]
+
+    def test_mimo_goal_actions_and_missing_candidate(self):
+        from types import SimpleNamespace
+        from alberto.engines.hermes_tools import _mimo_goal
+
+        calls = []
+        class Mimo:
+            def goal_set(self, goal, *, success_criteria=None):
+                calls.append(("set", goal, success_criteria))
+            def goal_get(self):
+                return "current goal"
+            def goal_clear(self):
+                calls.append(("clear",))
+            def judge(self, candidate, *, criteria=None):
+                return {"verdict": "pass", "criteria": criteria, "candidate": candidate}
+
+        agent = SimpleNamespace(mimo=Mimo())
+        assert _mimo_goal(agent, {"action": "set", "goal": "ship", "success_criteria": ["tests"]}) == {"ok": True, "goal": "ship"}
+        assert _mimo_goal(agent, {}) == {"ok": True, "goal": "current goal"}
+        assert _mimo_goal(agent, {"action": "clear"}) == {"ok": True}
+        assert _mimo_goal(agent, {"candidate": "patch", "success_criteria": "safe"}) == {
+            "ok": True, "verdict": {"verdict": "pass", "criteria": "safe", "candidate": "patch"}
+        }
+        assert _mimo_goal(agent, {"action": "judge"}) == {"ok": False, "error": "need 'candidate'"}
+        assert _mimo_goal(agent, {"action": "invalid"}) == {"ok": False, "error": "action invalid not supported"}
+        assert calls == [("set", "ship", ["tests"]), ("clear",)]
+
+    def test_mimo_max_and_compose_validate_and_dispatch(self):
+        from types import SimpleNamespace
+        from alberto.engines.hermes_tools import _mimo_max, _mimo_compose
+
+        calls = []
+        class Mimo:
+            def max_mode(self, prompt, *, n=3):
+                calls.append(("max", prompt, n))
+                return ["best"]
+            def compose(self, spec, *, steps=None):
+                calls.append(("compose", spec, steps))
+                return {"spec": "ok"}
+
+        agent = SimpleNamespace(mimo=Mimo())
+        assert _mimo_max(agent, {}) == {"ok": False, "error": "need 'prompt'"}
+        assert _mimo_max(agent, {"prompt": "solve", "n": 4}) == {"ok": True, "result": ["best"]}
+        assert _mimo_compose(agent, {}) == {"ok": False, "error": "need 'spec'"}
+        assert _mimo_compose(agent, {"spec": "app", "steps": ["spec", "review"]}) == {
+            "ok": True, "result": {"spec": "ok"}
+        }
+        assert calls == [("max", "solve", 4), ("compose", "app", ["spec", "review"])]
+
