@@ -701,16 +701,27 @@ def _validate_public_web_url(url: str):
     ):
         raise ValueError("local or internal hostnames are not allowed")
 
+    _resolve_public_web_addresses(
+        hostname, port or (443 if scheme == "https" else 80)
+    )
+    return parsed
+
+
+def _resolve_public_web_addresses(hostname: str, port: int) -> List[str]:
+    """Resolve a host once for a connection and reject any non-public result.
+
+    The returned numeric addresses are used for the socket connection itself,
+    preventing urllib from resolving the hostname a second time after checks.
+    """
+    import ipaddress
+    import socket
+
     try:
         literal = ipaddress.ip_address(hostname)
         addresses = [literal]
     except ValueError:
         try:
-            infos = socket.getaddrinfo(
-                hostname,
-                port or (443 if scheme == "https" else 80),
-                type=socket.SOCK_STREAM,
-            )
+            infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         except OSError as exc:
             raise ValueError(f"hostname resolution failed: {exc}") from exc
         addresses = []
@@ -724,7 +735,66 @@ def _validate_public_web_url(url: str):
         raise ValueError("hostname did not resolve to an IP address")
     if any(not address.is_global for address in addresses):
         raise ValueError("URL resolves to a non-public IP address")
-    return parsed
+    return [str(address) for address in addresses]
+
+
+class _PinnedHTTPConnection(__import__("http.client", fromlist=["HTTPConnection"]).HTTPConnection):
+    """Connect to a validated numeric IP, never a second hostname resolution."""
+
+    def connect(self):
+        import socket
+        addresses = _resolve_public_web_addresses(self.host, self.port or 80)
+        last_error = None
+        for address in addresses:
+            try:
+                self.sock = socket.create_connection(
+                    (address, self.port or 80), self.timeout, self.source_address
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise OSError("no usable public address")
+
+
+class _PinnedHTTPSConnection(__import__("http.client", fromlist=["HTTPSConnection"]).HTTPSConnection):
+    """Pin the TCP destination while retaining TLS SNI and hostname validation."""
+
+    def connect(self):
+        import socket
+        addresses = _resolve_public_web_addresses(self.host, self.port or 443)
+        last_error = None
+        for address in addresses:
+            raw_sock = None
+            try:
+                raw_sock = socket.create_connection(
+                    (address, self.port or 443), self.timeout, self.source_address
+                )
+                self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+                return
+            except OSError as exc:
+                last_error = exc
+                if raw_sock is not None:
+                    raw_sock.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError("no usable public address")
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=self._context,
+            check_hostname=self._check_hostname,
+        )
 
 
 class _SafeWebRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -747,7 +817,14 @@ def tool_webfetch(alberto, args: Dict) -> Tuple[str, bool]:
         max_length = max(1, min(int(args.get("max_length", 5000)), 100000))
         _validate_public_web_url(url)
         req = urllib.request.Request(url, headers={"User-Agent": "Alberto-AI/1.0"})
-        opener = urllib.request.build_opener(_SafeWebRedirectHandler())
+        # Disable environment proxies: the pinning connection handlers must
+        # own the actual destination socket for SSRF validation to be meaningful.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(),
+            _PinnedHTTPSHandler(),
+            _SafeWebRedirectHandler(),
+        )
         with opener.open(req, timeout=30) as response:
             raw = response.read(max_length * 4 + 1)
         content = raw.decode("utf-8", errors="replace")
