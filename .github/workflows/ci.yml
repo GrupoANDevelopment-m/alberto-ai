@@ -45,6 +45,24 @@ jobs:
         run: |
           python -m compileall -q alberto bin tests
 
+      - name: Verify behavioral suites are included in coverage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+          required = (
+              "tests/test_cli_conversation_contracts.py",
+              "tests/test_hermes_dispatch_contracts.py",
+          )
+          for test_path in required:
+              count = workflow.count(test_path)
+              if count < 2:
+                  raise SystemExit(
+                      f"{test_path} must appear in both regression and coverage commands; found {count}"
+                  )
+          PY
+
       - name: Run offline security and regression tests
         env:
           NVIDIA_API_KEY: "test-key-disabled"
