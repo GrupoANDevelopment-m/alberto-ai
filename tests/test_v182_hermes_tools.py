@@ -226,3 +226,22 @@ class TestHermesToolFailClosedContracts:
         result = tool_mcp(None, {"action": "delete_everything"})
         assert result["ok"] is False
         assert "unsupported MCP action" in result["error"]
+
+    @pytest.mark.parametrize("timeout", [True, False, 0, -1, 121, 1.5, "invalid", None])
+    def test_code_execution_rejects_invalid_timeout_before_sandbox(self, timeout):
+        from alberto.engines.hermes_tools import tool_code_execution
+
+        result = tool_code_execution(None, {"code": "print(1)", "timeout": timeout})
+        assert result["ok"] is False
+        assert "invalid timeout" in result["error"]
+
+    def test_code_execution_rejects_non_string_and_oversized_source(self):
+        from alberto.engines.hermes_tools import tool_code_execution
+
+        non_string = tool_code_execution(None, {"code": ["print(1)"]})
+        assert non_string["ok"] is False
+        assert "missing 'code'" in non_string["error"]
+
+        oversized = tool_code_execution(None, {"code": "x" * (256 * 1024 + 1)})
+        assert oversized["ok"] is False
+        assert "256 KiB" in oversized["error"]
