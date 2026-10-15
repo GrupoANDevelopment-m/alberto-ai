@@ -108,7 +108,9 @@ def test_tool_loop_rejects_malformed_or_non_object_arguments_without_dispatch(
         calls.append("executed")
         return {"ok": True}
 
-    monkeypatch.setitem(hermes_tools.TOOL_REGISTRY, "dangerous_test", dangerous)
+    from alberto.runtime import function_caller
+
+    monkeypatch.setitem(function_caller.TOOL_REGISTRY, "dangerous_test", dangerous)
 
     class Router:
         def invoke(self, *args, **kwargs):
