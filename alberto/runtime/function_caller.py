@@ -480,14 +480,22 @@ def tool_read(alberto, args: Dict) -> Tuple[str, bool]:
         return "invalid line range: start_line must be 0..100000 and max_lines 1..2000", True
     try:
         p = Path(path).expanduser()
-        # Enforce the same sensitive-path policy as file_read, including symlink targets.
-        from .nemoclaw_real import is_protected_path
+        # Line-ranged reads must not bypass the workspace boundary enforced
+        # by file_read. Protected-path checks alone do not confine arbitrary reads.
+        from .nemoclaw_real import is_protected_path, safe_resolve_path, PathViolation
         if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: protected file path", True
-        resolved = p.resolve()
-        if is_protected_path(str(resolved)):
+        sandbox = getattr(alberto, "sandbox", None)
+        if sandbox is None or not callable(getattr(sandbox, "home", None)):
+            return "BLOCKED by NemoClaw: configured sandbox is required for file reads", True
+        sandbox_root = Path(sandbox.home()).resolve()
+        try:
+            p = safe_resolve_path(str(p), sandbox_root=sandbox_root)
+            p.relative_to(sandbox_root)
+        except (PathViolation, ValueError) as exc:
+            return f"BLOCKED by NemoClaw: path must remain inside configured sandbox ({exc})", True
+        if is_protected_path(str(p)):
             return "BLOCKED by NemoClaw: resolved path is protected", True
-        p = resolved
         if not p.exists():
             return f"file not found: {path}", True
         # Python's text iterator materializes a complete line. Refuse unusually
