@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 # an unbounded number of futures or overload the machine running the tester.
 MAX_BENCHMARK_REQUESTS = 1000
 MAX_BENCHMARK_CONCURRENCY = 64
+HOST_APP_EXECUTION_OPT_IN = "ALBERTO_ALLOW_HOST_APP_TESTING"
 
 
 class AppTester:
@@ -39,6 +40,29 @@ class AppTester:
         self.frontend = self.app_dir / "frontend"
         self.backend = self.app_dir / "backend"
         self.results = []
+
+    @staticmethod
+    def _host_execution_opted_in() -> bool:
+        """Return whether the operator explicitly allowed running app code on the host.
+
+        App directories may contain untrusted generated code. Until these phases
+        execute through a real isolated sandbox with controlled file transfer,
+        host execution is disabled by default.
+        """
+        return os.environ.get(HOST_APP_EXECUTION_OPT_IN, "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+
+    def _host_execution_denied(self, phase: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "phase": phase,
+            "error": (
+                "refusing to execute app code on the host; configure a real isolated "
+                "sandbox, or explicitly set ALBERTO_ALLOW_HOST_APP_TESTING=1 to accept "
+                "the host-execution risk"
+            ),
+        }
 
     def smoke(self) -> Dict[str, Any]:
         """Quick smoke test: start backend, hit endpoints, screenshot frontend."""
@@ -69,6 +93,8 @@ class AppTester:
             return {"ok": False, "error": f"concurrency must be an integer between 1 and {MAX_BENCHMARK_CONCURRENCY}"}
         if not isinstance(endpoint, str) or not endpoint.startswith("/") or endpoint.startswith("//"):
             return {"ok": False, "error": "endpoint must be a local absolute path beginning with one slash"}
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("perf")
         # Start backend
         port = self._free_port()
         proc = subprocess.Popen(
@@ -141,7 +167,9 @@ class AppTester:
                 proc.kill()
 
     def test_install(self) -> Dict[str, Any]:
-        """Test that the app installs cleanly on a fresh setup."""
+        """Test install only after explicit operator opt-in to host execution."""
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("test_install")
         out = {"phase": "test_install", "steps": []}
         # 1. Clean install backend
         if self.backend.exists():
@@ -174,7 +202,9 @@ class AppTester:
         return out
 
     def test_frontend_e2e(self) -> Dict[str, Any]:
-        """End-to-end test of frontend using Playwright (headless)."""
+        """End-to-end test of frontend; host execution requires explicit opt-in."""
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("frontend_e2e")
         if not self.frontend.exists():
             return {"ok": False, "error": "no frontend"}
         if not shutil.which("npm"):
@@ -249,6 +279,8 @@ class AppTester:
 
     # ====== helpers ======
     def _test_backend(self) -> Dict[str, Any]:
+        if not self._host_execution_opted_in():
+            return self._host_execution_denied("backend_smoke")
         port = self._free_port()
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port)],
