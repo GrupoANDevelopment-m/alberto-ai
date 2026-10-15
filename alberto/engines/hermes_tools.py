@@ -16,8 +16,10 @@ Tools wrapped (all real upstream modules):
   checkpoint, blueprint, approval, process_registry, threat_patterns.
 """
 from __future__ import annotations
+import ast
 import json
 import os
+import shutil
 import sys
 import time
 import base64
@@ -1429,20 +1431,27 @@ def _mimo_compose(alberto, args):
 
 
 def _mimo_app_create(alberto, args):
-    """Use MiMo's spec/TDD/review pipeline before scaffolding an application."""
+    """Plan, generate, review, and safely materialize a constrained MiMo app."""
     name = args.get("name")
     spec = args.get("spec") or args.get("description")
     if not isinstance(name, str) or not isinstance(spec, str) or not spec.strip():
         return {"ok": False, "error": "need a valid 'name' and non-empty 'spec'/'description'"}
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+        return {"ok": False, "error": "name must be a 1-64 character slug"}
     if len(spec) > 4000:
         return {"ok": False, "error": "app specification must be at most 4000 characters"}
+    if args.get("stack", "react-vite-fastapi") != "react-vite-fastapi":
+        return {"ok": False, "error": "unsupported stack; supported stack: react-vite-fastapi"}
     output_dir = args.get("output_dir", ".")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return {"ok": False, "error": "output_dir must be a non-empty path"}
-    # Tool-created projects are confined to a real apps directory directly
-    # under the resolved sandbox home. Reject a symlinked apps root instead of
-    # silently treating an external target as part of the sandbox.
-    sandbox_root = Path(alberto.sandbox.home()).resolve()
+    sandbox = getattr(alberto, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "home", None)):
+        return {"ok": False, "error": "configured sandbox is required for app creation"}
+    try:
+        sandbox_root = Path(sandbox.home()).resolve()
+    except (OSError, TypeError, ValueError) as exc:
+        return {"ok": False, "error": f"cannot resolve sandbox home: {type(exc).__name__}"}
     apps_root = sandbox_root / "apps"
     try:
         if apps_root.is_symlink():
@@ -1456,8 +1465,17 @@ def _mimo_app_create(alberto, args):
     destination = (requested if requested.is_absolute() else apps_root / requested).resolve()
     if destination != apps_root and apps_root not in destination.parents:
         return {"ok": False, "error": "output_dir must stay inside the sandbox apps directory"}
-    # MiMo creates the engineering plan; AppCreator materializes only the
-    # reviewed, deterministic scaffold (never executes model-generated code).
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        destination = destination.resolve()
+        if destination != apps_root and apps_root not in destination.parents:
+            return {"ok": False, "error": "output_dir must stay inside the sandbox apps directory"}
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot prepare app output directory: {type(exc).__name__}"}
+    final_app = destination / name
+    if final_app.exists() or final_app.is_symlink():
+        return {"ok": False, "error": f"app {name} already exists at {final_app}"}
+
     try:
         plan = alberto.mimo.compose(
             "Plan a React/Vite frontend and FastAPI backend for this app. "
@@ -1470,10 +1488,7 @@ def _mimo_app_create(alberto, args):
     required_steps = {"spec", "tdd", "review"}
     if not isinstance(plan, dict) or not plan:
         return {"ok": False, "error": "MiMo did not return a usable application plan"}
-    # A partial response must never be accepted as a complete security gate.
-    # Require all three named stages, not merely that every returned stage passed.
-    missing_steps = sorted(required_steps - set(plan))
-    failed = list(missing_steps)
+    failed = sorted(required_steps - set(plan))
     for step, value in plan.items():
         if (not isinstance(value, dict)
                 or not isinstance(value.get("content"), str)
@@ -1485,22 +1500,126 @@ def _mimo_app_create(alberto, args):
         if not isinstance(verdict, dict) or verdict.get("verdict") != "pass":
             failed.append(step)
     if failed:
-        return {"ok": False, "error": "MiMo planning incomplete", "failed_steps": failed, "plan": plan}
-    from alberto.runtime.app_creator import AppCreator
-    created = AppCreator(output_dir=destination).create(
-        name, spec, stack=args.get("stack", "react-vite-fastapi"), run=False
+        return {"ok": False, "error": "MiMo planning incomplete",
+                "failed_steps": sorted(set(failed)), "plan": plan}
+
+    allowed_files = {"frontend/src/App.tsx", "backend/main.py"}
+    generation_prompt = (
+        "Implement the application described below using the reviewed plan. "
+        "Return ONLY one JSON object with exactly this schema: "
+        '{"files":{"frontend/src/App.tsx":"complete React TSX source",'
+        '"backend/main.py":"complete FastAPI Python source"}}. '
+        "Include both files and no others. Use only React already installed in the frontend; "
+        "do not add frontend package imports. Backend imports may use FastAPI, Pydantic, "
+        "and safe standard-library modules only. Do not use subprocess, os, sys, socket, "
+        "urllib, requests, eval, exec, compile, or dynamic imports. Do not include markdown fences. "
+        "The backend must define app = FastAPI(...). No commands, dependency changes, "
+        "or installation steps. The generated source will be reviewed but not executed here.\n\n"
+        f"User specification:\n{spec}\n\nReviewed plan:\n{json.dumps(plan, ensure_ascii=False)[:18000]}"
     )
-    if not created.get("ok"):
-        return created
+    try:
+        generated = alberto.mimo.invoke(
+            generation_prompt, task="code", max_tokens=8192, temperature=0.2
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo source generation failed: {type(exc).__name__}"}
+    if not isinstance(generated, str) or not generated.strip() or len(generated) > 160 * 1024:
+        return {"ok": False, "error": "MiMo source manifest is empty or exceeds 160 KiB"}
+    manifest_text = generated.strip()
+    fence = chr(96) * 3
+    if manifest_text.startswith(fence):
+        manifest_lines = manifest_text.splitlines()
+        manifest_text = "\n".join(manifest_lines[1:-1] if manifest_lines[-1].strip().startswith(fence)
+                                   else manifest_lines[1:])
+    try:
+        manifest = json.loads(manifest_text)
+    except (json.JSONDecodeError, TypeError):
+        return {"ok": False, "error": "MiMo source manifest must be valid JSON"}
+    if not isinstance(manifest, dict) or set(manifest) != {"files"} or not isinstance(manifest["files"], dict):
+        return {"ok": False, "error": "MiMo source manifest has an invalid schema"}
+    sources = manifest["files"]
+    if set(sources) != allowed_files:
+        return {"ok": False, "error": "MiMo must provide exactly the allowed frontend and backend source files"}
+    for relative, source in sources.items():
+        rel_path = Path(relative)
+        if rel_path.is_absolute() or ".." in rel_path.parts or "\\" in relative:
+            return {"ok": False, "error": f"unsafe generated path: {relative}"}
+        if not isinstance(source, str) or not source.strip() or "\x00" in source or len(source.encode("utf-8")) > 64 * 1024:
+            return {"ok": False, "error": f"invalid generated source for {relative}"}
+    frontend = sources["frontend/src/App.tsx"]
+    if not re.search(r"\bexport\s+default\b", frontend):
+        return {"ok": False, "error": "generated frontend must export a default React component"}
+    imports = re.findall(r"\bfrom\s*['\"]([^'\"]+)['\"]|\bimport\s*['\"]([^'\"]+)['\"]", frontend)
+    if any((a or b) != "react" for a, b in imports) or re.search(r"\b(?:require|import)\s*\(", frontend):
+        return {"ok": False, "error": "generated frontend contains a non-allowlisted or dynamic import"}
+    backend = sources["backend/main.py"]
+    try:
+        tree = ast.parse(backend, filename="generated-main.py")
+    except SyntaxError as exc:
+        return {"ok": False, "error": f"generated backend has invalid Python syntax at line {exc.lineno}"}
+    allowed_import_roots = {"fastapi", "pydantic", "typing", "datetime", "json", "math", "uuid", "collections", "enum"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".", 1)[0] for alias in node.names]
+            if any(root not in allowed_import_roots for root in roots):
+                return {"ok": False, "error": "generated backend contains a non-allowlisted import"}
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".", 1)[0]
+            if root not in allowed_import_roots or node.level:
+                return {"ok": False, "error": "generated backend contains a non-allowlisted import"}
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile", "__import__"}:
+            return {"ok": False, "error": "generated backend contains a prohibited dynamic-code operation"}
+    if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FastAPI"
+               for node in ast.walk(tree)):
+        return {"ok": False, "error": "generated backend must construct a FastAPI application"}
+
+    try:
+        review = alberto.mimo.judge(
+            frontend + "\n\n# --- generated backend ---\n" + backend,
+            criteria=(
+                "Both sources must implement the user's app specification, be coherent and complete, "
+                "use only allowlisted imports/dependencies, contain no dynamic code execution, and be "
+                "valid React TSX plus syntactically valid FastAPI Python. Return pass only when all hold."
+            ),
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"MiMo generated-source review failed: {type(exc).__name__}"}
+    if not isinstance(review, dict) or review.get("verdict") != "pass":
+        return {"ok": False, "error": "MiMo generated-source review did not pass", "review": review}
+
+    try:
+        from alberto.runtime.app_creator import AppCreator
+        created = AppCreator(output_dir=destination).create(
+            name, spec, stack="react-vite-fastapi", run=False
+        )
+        if not created.get("ok"):
+            return created
+        app_dir = Path(created["path"]).resolve()
+        if app_dir.parent != destination or app_dir.name != name:
+            shutil.rmtree(app_dir, ignore_errors=True)
+            return {"ok": False, "error": "created app path escaped the validated output directory"}
+        for relative, source in sources.items():
+            target = (app_dir / relative).resolve()
+            target.relative_to(app_dir)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source, encoding="utf-8")
+    except Exception as exc:
+        try:
+            if "created" in locals() and isinstance(created, dict) and created.get("ok") and created.get("path"):
+                shutil.rmtree(Path(created["path"]), ignore_errors=True)
+        except Exception:
+            pass
+        return {"ok": False, "error": f"app materialization failed: {type(exc).__name__}"}
+    created["generated_files"] = sorted(sources)
     return {
         "ok": True,
         "engine": "MiMo",
-        "planning_steps": list(plan.keys()),
+        "planning_steps": ["spec", "tdd", "review"],
         "plan": plan,
+        "source_review": review,
         "application": created,
-        "note": "MiMo produced the spec/TDD/review plan; AppCreator materialized the deterministic scaffold. Model-generated source is not executed.",
+        "note": "MiMo generated the application source and passed static/review gates; this tool did not execute generated code.",
     }
-
 
 def _mimo_subagent(alberto, args):
     """MiMo parallel subagents."""
