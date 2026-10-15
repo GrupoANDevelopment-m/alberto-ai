@@ -491,3 +491,61 @@ def test_meta_controller_blocks_dependents_after_failed_prerequisite():
     assert second.status == "blocked"
     assert "dependency not completed" in second.error
     assert result.status == "failed"
+
+
+def test_meta_controller_does_not_select_tools_from_configured_mcp_server():
+    from types import SimpleNamespace
+    from alberto.runtime.meta_controller import MetaController
+
+    mcp_calls = []
+
+    class MCP:
+        def list_servers(self):
+            mcp_calls.append("list_servers")
+            return [{"name": "external", "tools": ["search_records"], "connected": True}]
+
+    class Skills:
+        def search(self, *args, **kwargs):
+            return []
+
+        def recommend(self, *args, **kwargs):
+            raise AssertionError("recommend should not run when no relevant skill exists")
+
+    controller = object.__new__(MetaController)
+    controller.alberto = SimpleNamespace(mcp=MCP())
+    controller.skill_manager = Skills()
+    controller.plans = {}
+    controller._on_event = None
+    controller._decompose = lambda objective: ["search external records"]
+    controller._record_plan = lambda plan: None
+
+    plan = controller.plan_objective("search external records")
+
+    assert plan.subtasks[0].skill is None
+    assert mcp_calls == []
+
+
+def test_meta_controller_marks_skill_done_without_validating_deliverable():
+    from types import SimpleNamespace
+    from alberto.runtime.meta_controller import MetaController, Plan, SubTask
+
+    outcomes = []
+    controller = object.__new__(MetaController)
+    controller._on_event = None
+    controller.skill_manager = SimpleNamespace(
+        record_outcome=lambda name, *, success, duration: outcomes.append(
+            (name, success, duration)
+        )
+    )
+    controller._try_skill = lambda task, **kwargs: (
+        True, "unverified output unrelated to the requested result", ""
+    )
+    task = SubTask(id="st-1", description="produce a verified report", skill="report-skill")
+    plan = Plan(objective="produce a verified report", subtasks=[task])
+
+    controller._execute_subtask(plan, task)
+
+    # Characterizes the current limitation: process success is treated as task success.
+    assert task.status == "done"
+    assert task.output == "unverified output unrelated to the requested result"
+    assert outcomes and outcomes[0][0:2] == ("report-skill", True)
