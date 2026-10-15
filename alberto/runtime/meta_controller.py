@@ -339,8 +339,18 @@ class MetaController:
                                               duration=time.time() - st.started_at)
             self._emit("subtask_done", {"id": st.id, "skill": st.skill})
             return
-        # Failure path: research, learn, evolve, create new skill
+        # A policy denial is not a skill failure. Do not research around,
+        # mutate, evolve, or create skills to bypass an execution boundary.
         st.error = error
+        if isinstance(error, str) and error.startswith("skill execution refused:"):
+            st.status = "blocked"
+            st.finished_at = time.time()
+            self._emit("subtask_blocked", {
+                "id": st.id, "reason": "execution policy denied the operation"
+            })
+            return
+
+        # Failure path: research, learn, evolve, create new skill
         self.skill_manager.record_outcome(st.skill, success=False,
                                           duration=time.time() - st.started_at)
         # Detect obstacle
