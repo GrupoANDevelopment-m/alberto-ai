@@ -1504,6 +1504,11 @@ def _mimo_app_create(alberto, args):
     sandbox = getattr(alberto, "sandbox", None)
     if sandbox is None or not callable(getattr(sandbox, "home", None)):
         return {"ok": False, "error": "configured sandbox is required for app creation"}
+    if getattr(sandbox, "isolation_level", "") == "docker-container":
+        return {
+            "ok": False,
+            "error": "MiMo app creation currently materializes files through host filesystem APIs; Docker mode is refused until file transfer and build/test execution use the sandbox API",
+        }
     try:
         sandbox_root = Path(sandbox.home()).resolve()
     except (OSError, TypeError, ValueError) as exc:
