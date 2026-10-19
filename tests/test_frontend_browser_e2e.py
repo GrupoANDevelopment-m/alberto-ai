@@ -140,9 +140,13 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
             # Squad activation updates backend state, not merely a local success toast.
             page.get_by_role("button", name="Squads").click()
             page.locator(".squad-card").filter(has_text="engineering").get_by_role("button", name="ativar").click()
-            page.locator("#squad-status .squad-active-name", has_text="engineering").wait_for(timeout=5000)
+            page.locator(".squad-card.active").filter(has_text="engineering").wait_for(timeout=5000)
             status = page.evaluate("async () => await (await fetch('/api/status')).json()")
             assert status["active_squad"] == "engineering"
+            # The sidebar status exists only in the chat view; assert it there.
+            page.get_by_role("button", name="Chat").click()
+            page.locator("#squad-status .squad-active-name", has_text="engineering").wait_for(timeout=5000)
+            page.get_by_role("button", name="Squads").click()
             page.locator(".squad-card").filter(has_text="engineering").get_by_role("button", name="hibernar").click()
             page.wait_for_function("async () => (await (await fetch('/api/status')).json()).active_squad === null", timeout=10000)
 
