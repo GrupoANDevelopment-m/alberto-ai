@@ -51,7 +51,7 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env["ALBERTO_ENV"] = "development"
-    env.pop("ALBERTO_API_TOKEN", None)
+    env["ALBERTO_API_TOKEN"] = "e2e-test-token-with-32-characters"
     process = subprocess.Popen(
         [sys.executable, str(ROOT / "tests" / "frontend_e2e_server.py"), "--port", str(port)],
         cwd=ROOT,
@@ -63,12 +63,17 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
     errors = []
     try:
         base_url = f"http://127.0.0.1:{port}"
-        _wait_ready(base_url + "/api/status", process)
+        _wait_ready(base_url + "/", process)
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1440, "height": 960})
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
+            auth_dialog = page.locator('[aria-labelledby="alberto-auth-title"]')
+            auth_dialog.wait_for(timeout=10000)
+            page.locator("#alberto-auth-token").fill("e2e-test-token-with-32-characters")
+            page.get_by_role("button", name="Entrar").click()
+            auth_dialog.wait_for(state="detached", timeout=10000)
             page.locator("#status-text").filter(has_text="online").wait_for(timeout=10000)
             assert page.title().startswith("Alberto AI")
             assert page.locator("#status-text").inner_text() == "online"
