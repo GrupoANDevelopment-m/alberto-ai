@@ -63,8 +63,8 @@ class FakeAlberto:
             squad=active_squad,
             task_routing="chat",
         ))
-        self.router = SimpleNamespace(resolve=lambda task: SimpleNamespace(
-            provider="test", model_id=f"test-{task}", base_url="http://test.invalid/v1"
+        self.router = SimpleNamespace(resolve=lambda task: self._models.get(
+            task, SimpleNamespace(provider="test", model_id=f"test-{task}", base_url="http://test.invalid/v1")
         ))
         self.mimo = SimpleNamespace(is_running=lambda: True, memory_list=self.memory.list)
         self.hermes = SimpleNamespace(
