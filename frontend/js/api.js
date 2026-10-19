@@ -112,9 +112,10 @@ export class AlbertoAPI {
   shortcutRemove(key) { return this._fetch(`/api/shortcut/remove?key=${encodeURIComponent(key)}`, { method: 'DELETE' }); }
   shortcutUse(key, args = '') { return this._fetch('/api/shortcut/use', { method: 'POST', body: JSON.stringify({ key, args }) }); }
 
-  async chat(prompt, onChunk, conversationId) {
+  async chat(prompt, onChunk, conversationId, newConversation = false) {
     const body = { prompt };
     if (conversationId) body.conversation_id = conversationId;
+    if (newConversation) body.new_conversation = true;
     const options = {
       method: 'POST',
       headers: { Accept: 'text/event-stream' },
