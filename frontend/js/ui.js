@@ -960,7 +960,7 @@ class AlbertoApp {
       { glyph: '🎧', name: 'ativar squad support', cmd: '/aiox-squad activate support', action: () => this.activateSquad('support') },
       { glyph: '🧠', name: 'mostrar estratégia', cmd: '/strategy', action: () => { $('#composer').value = '/strategy'; this.sendPrompt(); } },
       { glyph: '🔍', name: 'buscar memória', cmd: '/memory search', action: () => this.switchView('memory') },
-      { glyph: '🌐', name: 'abrir browser', cmd: '/hermes browser <URL>', action: () => { $('#composer').value = '/hermes browser '; $('#composer').focus(); } },
+      { glyph: '🌐', name: 'abrir browser', cmd: '/hermes browser <URL>', action: () => { this.switchView('chat'); $('#composer').value = '/hermes browser '; $('#composer').focus(); } },
       { glyph: '⚙️', name: 'configurações', cmd: '/config', action: () => this.switchView('settings') },
     ];
     const q = query.toLowerCase();
