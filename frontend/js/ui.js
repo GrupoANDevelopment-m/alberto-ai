@@ -60,6 +60,7 @@ class AlbertoApp {
     // Memory search
     $('#memory-search-input').addEventListener('input', (e) => this.searchMemory(e.target.value));
     $('#memory-add-btn').addEventListener('click', () => this.openMemoryAddModal());
+    $('#shortcut-add-btn').addEventListener('click', () => this.openShortcutAddModal());
 
     // Settings
     $('#settings-add-model').addEventListener('click', () => this.openModelAddModal());
@@ -458,9 +459,16 @@ class AlbertoApp {
   }
 
   async runSquadDemo(name) {
-    this.switchView('chat');
-    $('#composer').value = `demo do squad ${name}: build a counter`;
-    await this.sendPrompt();
+    const prompt = window.prompt(`Tarefa a executar no squad "${name}":`, 'Analisa o estado e propõe próximos passos.');
+    if (!prompt || !prompt.trim()) return;
+    try {
+      const result = await this.api.squadRun(name, prompt.trim());
+      this.switchView('chat');
+      this.appendMessage('assistant', JSON.stringify(result, null, 2));
+      this.toast(`Resultado real do squad "${name}" recebido.`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao executar squad: ${error.message}`, 'error');
+    }
   }
 
   updateSquadPanel() {
@@ -508,7 +516,25 @@ class AlbertoApp {
         <div class="memory-value">${this.escapeHtml((m.value || '').slice(0, 200))}</div>
         <div class="memory-tags">${this.escapeHtml(m.tags || '')}</div>
       `;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'ghost-btn';
+      remove.textContent = 'apagar';
+      remove.setAttribute('aria-label', `Apagar memória ${m.key}`);
+      remove.addEventListener('click', () => this.deleteMemory(m.key));
+      item.appendChild(remove);
       list.appendChild(item);
+    }
+  }
+
+  async deleteMemory(key) {
+    try {
+      const result = await this.api.memoryDelete(key);
+      if (!result?.ok) throw new Error('O backend não confirmou a eliminação.');
+      await this.loadMemory();
+      this.toast(`Memória "${key}" eliminada.`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao eliminar memória: ${error.message}`, 'error');
     }
   }
 
@@ -568,21 +594,71 @@ class AlbertoApp {
   renderShortcuts() {
     const list = $('#shortcuts-list');
     const keys = Object.keys(this.shortcuts);
+    list.innerHTML = '';
     if (keys.length === 0) {
-      list.innerHTML = '<div class="shortcut-empty">nenhum atalho. comece com <code>/s add &lt;key&gt; &lt;exp&gt;</code></div>';
+      list.innerHTML = '<div class="shortcut-empty">Nenhum atalho guardado. Use “Adicionar atalho” para criar um.</div>';
       return;
     }
-    list.innerHTML = '';
     for (const k of keys) {
-      const s = this.shortcuts[k];
+      const shortcut = this.shortcuts[k];
       const item = document.createElement('div');
       item.className = 'shortcut-item';
       item.innerHTML = `
         <div class="shortcut-key">${this.escapeHtml(k)}</div>
-        <div class="shortcut-exp">${this.escapeHtml(s.expansion || '')}</div>
-        <div class="shortcut-count">usado ${s.use_count || 0}x</div>
+        <div class="shortcut-exp">${this.escapeHtml(shortcut.expansion || '')}</div>
+        <div class="shortcut-count">usado ${shortcut.use_count || 0}x</div>
       `;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'ghost-btn';
+      remove.textContent = 'apagar';
+      remove.setAttribute('aria-label', `Apagar atalho ${k}`);
+      remove.addEventListener('click', () => this.removeShortcut(k));
+      item.appendChild(remove);
       list.appendChild(item);
+    }
+  }
+
+  openShortcutAddModal() {
+    this.openModal('Adicionar atalho', `
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <label for="modal-shortcut-key">Chave</label>
+        <input id="modal-shortcut-key" placeholder="ex.: resumo" autocomplete="off" />
+        <label for="modal-shortcut-expansion">Expansão</label>
+        <textarea id="modal-shortcut-expansion" rows="4" placeholder="Texto ou comando a expandir"></textarea>
+      </div>
+    `, [
+      { label: 'cancelar', class: 'ghost-btn', action: () => this.closeModal() },
+      { label: 'salvar', class: 'primary-btn', action: () => this.saveShortcut() },
+    ]);
+  }
+
+  async saveShortcut() {
+    const key = $('#modal-shortcut-key').value.trim();
+    const expansion = $('#modal-shortcut-expansion').value.trim();
+    if (!key || !expansion) {
+      this.toast('Chave e expansão são obrigatórias.', 'error');
+      return;
+    }
+    try {
+      const result = await this.api.shortcutAdd(key, expansion);
+      if (!result?.ok) throw new Error('O backend não confirmou a gravação.');
+      await this.loadShortcuts();
+      this.closeModal();
+      this.toast(`Atalho "${key}" guardado no backend.`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao guardar atalho: ${error.message}`, 'error');
+    }
+  }
+
+  async removeShortcut(key) {
+    try {
+      const result = await this.api.shortcutRemove(key);
+      if (!result?.ok) throw new Error('O backend não confirmou a eliminação.');
+      await this.loadShortcuts();
+      this.toast(`Atalho "${key}" eliminado.`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao eliminar atalho: ${error.message}`, 'error');
     }
   }
 
