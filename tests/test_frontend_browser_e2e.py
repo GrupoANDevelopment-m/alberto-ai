@@ -91,6 +91,13 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
 
             # Conversation ID is retained and reused by the frontend.
             assert page.evaluate("sessionStorage.getItem('alberto.conversationId')") == "e2e-conversation-1"
+            page.locator("#composer").fill("segundo turno na mesma conversa")
+            page.locator("#send-btn").click()
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('.msg.assistant .msg-content')].some(el => el.textContent.includes('E2E backend reply: segundo turno'))",
+                timeout=10000,
+            )
+            assert page.evaluate("sessionStorage.getItem('alberto.conversationId')") == "e2e-conversation-1"
 
             # Clear resets both visible transcript and backend conversation identity.
             page.locator("#btn-clear").click()
@@ -125,6 +132,10 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
             page.locator(".shortcut-key", has_text="e2e-shortcut").wait_for(timeout=10000)
             page.get_by_role("button", name="Apagar atalho e2e-shortcut").click()
             page.locator(".shortcut-key", has_text="e2e-shortcut").wait_for(state="detached", timeout=10000)
+
+            # Tool catalogue is populated from the live backend endpoint.
+            page.get_by_role("button", name="Tools").click()
+            assert page.locator("#tools-grid .tool-card").count() > 0
 
             # Squad activation updates backend state, not merely a local success toast.
             page.get_by_role("button", name="Squads").click()
