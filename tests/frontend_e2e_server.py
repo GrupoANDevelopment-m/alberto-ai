@@ -131,7 +131,9 @@ class FakeAlberto:
             return {}
         return {"LLM_MODEL": self._models[task].model_id, "OPENAI_API_KEY": ""}
 
-    def chat(self, prompt, conversation_id=None):
+    def chat(self, prompt, conversation_id=None, new_conversation=False):
+        if new_conversation:
+            conversation_id = None
         return {
             "response": f"E2E backend reply: {prompt}",
             "strategy": {"mode": "solo", "engine": "mimo", "task_routing": "chat"},
