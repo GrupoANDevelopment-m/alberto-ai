@@ -113,6 +113,18 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
             page.get_by_role("button", name="salvar").click()
             page.locator(".memory-key", has_text="e2e.frontend").wait_for(timeout=10000)
             assert page.locator(".memory-value", has_text="persisted-through-real-http").count() == 1
+            page.get_by_role("button", name="Apagar memória e2e.frontend").click()
+            page.locator(".memory-key", has_text="e2e.frontend").wait_for(state="detached", timeout=10000)
+
+            # Shortcut create/delete controls must persist through backend routes.
+            page.get_by_role("button", name="Atalhos").click()
+            page.locator("#shortcut-add-btn").click()
+            page.locator("#modal-shortcut-key").fill("e2e-shortcut")
+            page.locator("#modal-shortcut-expansion").fill("texto de teste")
+            page.get_by_role("button", name="salvar").click()
+            page.locator(".shortcut-key", has_text="e2e-shortcut").wait_for(timeout=10000)
+            page.get_by_role("button", name="Apagar atalho e2e-shortcut").click()
+            page.locator(".shortcut-key", has_text="e2e-shortcut").wait_for(state="detached", timeout=10000)
 
             # Squad activation updates backend state, not merely a local success toast.
             page.get_by_role("button", name="Squads").click()
@@ -122,12 +134,23 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
                 import json
                 status = json.loads(response.read().decode("utf-8"))
             assert status["active_squad"] == "engineering"
+            page.locator(".squad-card").filter(has_text="engineering").get_by_role("button", name="hibernar").click()
+            page.wait_for_function("async () => (await (await fetch('/api/status')).json()).active_squad === null", timeout=10000)
 
-            # Navigation works on a narrow mobile viewport without JS runtime errors.
+            # Model configuration is reflected from the backend, not only local text.
             page.set_viewport_size({"width": 390, "height": 844})
             page.get_by_role("button", name="Config").click()
             assert page.locator('[data-view="settings"]').evaluate("(el) => el.classList.contains('active')")
             assert page.locator("#settings-add-model").is_visible()
+            page.locator("#settings-add-model").click()
+            page.locator("#modal-task").select_option("chat")
+            page.locator("#modal-provider").fill("test-provider")
+            page.locator("#modal-modelid").fill("e2e-chat-model")
+            page.locator("#modal-baseurl").fill("https://example.invalid/v1")
+            page.locator("#modal-credenv").fill("E2E_TEST_KEY")
+            page.get_by_role("button", name="salvar").click()
+            page.locator("#settings-models").get_by_text("test-provider/e2e-chat-model").wait_for(timeout=10000)
+            assert page.locator("#m-chat").inner_text() == "test-provider/e2e-chat-model"
             assert not errors, f"Browser JavaScript errors: {errors}"
             browser.close()
     finally:
