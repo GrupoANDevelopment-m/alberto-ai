@@ -391,25 +391,112 @@ class AlbertoApp {
   }
 
   // ===== Voice & Upload =====
-  toggleVoice() { this.toast('A chamada de voz ainda não está implementada.', 'info'); }
-  uploadFile() {
-    this.toast('O envio de ficheiros ainda não está ligado ao backend; nenhum ficheiro foi enviado.', 'info');
-  }
-  takeScreenshot() { this.toast('A captura de screenshot ainda não está implementada.', 'info'); }
-  startVoiceInput() {
-    if (!('webkitSpeechRecognition' in window)) {
-      this.toast('voz não suportada neste navegador', 'error');
+  toggleVoice() {
+    if (!('speechSynthesis' in window)) {
+      this.toast('A síntese de voz não é suportada neste navegador.', 'error');
       return;
     }
-    const rec = new webkitSpeechRecognition();
-    rec.lang = 'pt-BR';
-    rec.onresult = (e) => {
-      const text = e.results[0][0].transcript;
-      $('#composer').value = text;
-      this.autoresizeComposer();
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+      this.toast('Leitura de voz interrompida.', 'info');
+      return;
+    }
+    const messages = $('.msg.assistant .msg-content');
+    const latest = messages[messages.length - 1]?.innerText?.trim();
+    if (!latest) {
+      this.toast('Ainda não há resposta do Alberto para ler em voz alta.', 'info');
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(latest);
+    utterance.lang = 'pt-PT';
+    utterance.onerror = () => this.toast('Não foi possível reproduzir a resposta por voz.', 'error');
+    window.speechSynthesis.speak(utterance);
+  }
+
+  uploadFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt,.md,.json,.csv,.py,.js,.ts,.tsx,.jsx,.html,.css,.yml,.yaml,.xml,.log,.sql,.sh';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (file.size > 1_000_000) {
+        this.toast('O ficheiro excede o limite de 1 MB.', 'error');
+        return;
+      }
+      const allowed = /\.(txt|md|json|csv|py|js|ts|tsx|jsx|html|css|yml|yaml|xml|log|sql|sh)$/i;
+      if (!allowed.test(file.name)) {
+        this.toast('Formato não suportado. Anexe um ficheiro de texto ou código.', 'error');
+        return;
+      }
+      try {
+        const contents = await file.text();
+        const composer = $('#composer');
+        const attachment = `\n\n[Conteúdo de ${file.name}]\n\`\`\`\n${contents}\n\`\`\`\n`;
+        composer.value = composer.value ? composer.value + attachment : `Analisa este ficheiro: ${file.name}${attachment}`;
+        this.autoresizeComposer();
+        composer.focus();
+        this.toast(`Conteúdo de "${file.name}" adicionado ao compositor. Envie a mensagem para o processar.`, 'success');
+      } catch (error) {
+        this.toast(`Não foi possível ler o ficheiro: ${error.message}`, 'error');
+      }
     };
+    input.click();
+  }
+
+  async takeScreenshot() {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      this.toast('A captura de ecrã não é suportada neste navegador/contexto.', 'error');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Falha ao gerar imagem.')), 'image/png'));
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `alberto-screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+      this.toast('Captura guardada como PNG.', 'success');
+    } catch (error) {
+      this.toast(`Captura cancelada ou falhou: ${error.message}`, 'info');
+    } finally {
+      stream?.getTracks().forEach(track => track.stop());
+    }
+  }
+
+  startVoiceInput() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      this.toast('O reconhecimento de voz não é suportado neste navegador.', 'error');
+      return;
+    }
+    const rec = new Recognition();
+    rec.lang = 'pt-PT';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (!transcript) return;
+      const composer = $('#composer');
+      composer.value = composer.value ? `${composer.value} ${transcript}` : transcript;
+      this.autoresizeComposer();
+      composer.focus();
+    };
+    rec.onerror = (event) => this.toast(`Reconhecimento de voz falhou: ${event.error || 'erro desconhecido'}`, 'error');
     rec.start();
-    this.toast('ouvindo…', 'info');
+    this.toast('A ouvir. Fale agora…', 'info');
   }
 
   // ===== Engine toggle =====
