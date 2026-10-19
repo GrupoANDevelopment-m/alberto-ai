@@ -49,6 +49,7 @@ class ChatRequest(BaseModel):
     prompt: str
     squad: Optional[str] = None
     conversation_id: Optional[str] = None
+    new_conversation: bool = False
 
 class MemorySetRequest(BaseModel):
     key: str
@@ -213,7 +214,11 @@ def create_app(alberto: Optional[Alberto] = None,
 
         async def gen():
             try:
-                result = a.chat(req.prompt, conversation_id=req.conversation_id)
+                result = a.chat(
+                    req.prompt,
+                    conversation_id=req.conversation_id,
+                    new_conversation=req.new_conversation,
+                )
                 text = result.get("response", "")
                 for chunk in chunk_text(text, size=20):
                     yield "data: " + json.dumps({"type": "text", "content": chunk}) + "\n\n"
