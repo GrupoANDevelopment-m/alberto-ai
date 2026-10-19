@@ -192,11 +192,11 @@ def test_perf_against_real_local_fastapi_backend(tmp_path, monkeypatch):
     backend = app_dir / "backend"
     backend.mkdir(parents=True)
     (backend / "main.py").write_text(
-        "from fastapi import FastAPI\\n"
-        "app = FastAPI()\\n"
-        "@app.get('/')\\n"
-        "def health():\\n"
-        "    return {'status': 'ok'}\\n",
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "@app.get('/')\n"
+        "def health():\n"
+        "    return {'status': 'ok'}\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ALBERTO_ALLOW_HOST_APP_TESTING", "1")
