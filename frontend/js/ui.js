@@ -15,6 +15,8 @@ class AlbertoApp {
     this.shortcuts = {};
     this.squads = [];
     this.memory = [];
+    this.conversationId = sessionStorage.getItem('alberto.conversationId') || null;
+    this.isSending = false;
     this.bindEvents();
     this.init();
   }
@@ -80,31 +82,19 @@ class AlbertoApp {
       $('#status-dot').classList.add('online');
       $('#status-text').textContent = 'online';
 
-      await this.loadSquads();
-      await this.loadShortcuts();
-      await this.loadMemory();
-      await this.loadTools();
+      $('#status-dot').classList.remove('error');
+      $('#status-text').textContent = 'online';
+      await Promise.allSettled([
+        this.loadSquads(), this.loadShortcuts(), this.loadMemory(),
+        this.loadTools(), this.loadModels(),
+      ]);
       this.updateGreeting();
     } catch (e) {
+      $('#status-dot').classList.remove('online');
       $('#status-dot').classList.add('error');
-      $('#status-text').textContent = 'offline (mock)';
-      this.toast('Backend offline — usando dados mock pra preview', 'info');
-      this.applyStatus(this.mockStatus());
+      $('#status-text').textContent = 'offline';
+      this.toast(`Backend indisponível: ${e.message}`, 'error');
     }
-  }
-
-  mockStatus() {
-    return {
-      name: 'Alberto AI',
-      version: '1.0.0',
-      sandbox: 'LocalSandbox',
-      mimo: { running: true, memory_keys: 0 },
-      hermes: { running: false },
-      shortcuts: 0,
-      squads: ['engineering', 'research', 'product', 'incident', 'data-ml', 'growth', 'finance', 'support'],
-      active_squad: null,
-      models: [],
-    };
   }
 
   applyStatus(status) {
@@ -169,9 +159,10 @@ class AlbertoApp {
     const text = composer.value.trim();
     if (!text) return;
 
-    // Hide empty state
+    if (this.isSending) return;
+    this.isSending = true;
+    $('#send-btn').disabled = true;
     $('#chat-empty').style.display = 'none';
-    this.removeSquadPanel();
 
     // Add user message
     this.appendMessage('user', text);
@@ -183,7 +174,9 @@ class AlbertoApp {
     let strategy = { mode: 'solo', engine: 'mimo', task_routing: 'code' };
     try {
       strategy = await this.api.strategy(text);
-    } catch {}
+    } catch (error) {
+      this.toast(`Não foi possível obter a estratégia: ${error.message}`, 'error');
+    }
 
     // Add typing indicator
     const typing = this.appendTyping();
@@ -206,16 +199,26 @@ class AlbertoApp {
           if (chunk.tool_calls) finalToolCalls = chunk.tool_calls;
           if (chunk.conversation_id) finalConvId = chunk.conversation_id;
         } else if (chunk.type === 'error') {
-          responseText = `[erro: ${chunk.error}]`;
+          responseText = `Erro do backend: ${chunk.error || 'falha não especificada'}`;
         }
-      });
+      }, this.conversationId);
+      if (finalConvId) {
+        this.conversationId = finalConvId;
+        sessionStorage.setItem('alberto.conversationId', finalConvId);
+      }
+      if (!responseText.trim()) throw new Error('O backend terminou o stream sem conteúdo.');
     } catch (e) {
-      responseText = `[backend offline] ${e.message}\n\nVocê precisa rodar:\n  alberto serve --port 8741\n\nResposta local (preview):\n${this.mockResponse(text, strategy)}`;
+      responseText = `Não foi possível obter resposta real do Alberto: ${e.message}`;
+      $('#status-dot').classList.add('error');
+      $('#status-dot').classList.remove('online');
+      $('#status-text').textContent = 'erro de API';
+    } finally {
+      typing.remove();
+      this.isSending = false;
+      $('#send-btn').disabled = false;
     }
 
-    typing.remove();
-    const finalText = responseText || this.mockResponse(text, finalStrategy);
-    this.appendMessage('assistant', finalText, finalStrategy);
+    this.appendMessage('assistant', responseText, finalStrategy);
 
     if (finalToolCalls && finalToolCalls.length) {
       finalToolCalls.forEach((tc) => {
@@ -227,30 +230,6 @@ class AlbertoApp {
     if (text.toLowerCase().includes('memory')) {
       this.loadMemory();
     }
-  }
-
-  mockResponse(text, strategy) {
-    if (text.startsWith('/aiox-squad activate')) {
-      const name = text.split(' ').pop();
-      this.activeSquad = name;
-      this.updateSquadPanel();
-      return `Squad **${name}** ativado. Próximos comandos serão roteados por ele.`;
-    }
-    if (text.startsWith('/hermes browser')) {
-      return `🌐 Buscando ${text.split(' ').slice(2).join(' ')}... (em produção, abriria Hermes browser)`;
-    }
-    if (text.startsWith('/s ')) {
-      const parts = text.split(' ');
-      const key = parts[1];
-      const expansion = parts.slice(2).join(' ');
-      this.shortcuts[key] = { expansion, use_count: 0 };
-      this.renderShortcuts();
-      return `Atalho **${key}** → \`${expansion}\``;
-    }
-    if (text.startsWith('/strategy')) {
-      return JSON.stringify(strategy, null, 2);
-    }
-    return `Recebi: "${text}"\n\nEstratégia: ${strategy.mode} | engine=${strategy.engine} | task=${strategy.task_routing}\n\n(Em produção, isto viria do LLM via streaming.)`;
   }
 
   appendMessage(role, content, strategy = null) {
@@ -337,23 +316,22 @@ class AlbertoApp {
   }
 
   clearChat() {
+    if (this.isSending) {
+      this.toast('Aguarde a resposta atual antes de limpar a conversa.', 'info');
+      return;
+    }
     $('#chat-scroll').innerHTML = '';
     $('#chat-empty').style.display = 'flex';
-    this.loadMemory();
+    this.conversationId = null;
+    sessionStorage.removeItem('alberto.conversationId');
   }
 
   // ===== Voice & Upload =====
-  toggleVoice() { this.toast('voice: em desenvolvimento', 'info'); }
+  toggleVoice() { this.toast('A chamada de voz ainda não está implementada.', 'info'); }
   uploadFile() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.onchange = (e) => {
-      const f = e.target.files[0];
-      if (f) this.toast(`arquivo "${f.name}" anexado`, 'info');
-    };
-    input.click();
+    this.toast('O envio de ficheiros ainda não está ligado ao backend; nenhum ficheiro foi enviado.', 'info');
   }
-  takeScreenshot() { this.toast('screenshot: em desenvolvimento', 'info'); }
+  takeScreenshot() { this.toast('A captura de screenshot ainda não está implementada.', 'info'); }
   startVoiceInput() {
     if (!('webkitSpeechRecognition' in window)) {
       this.toast('voz não suportada neste navegador', 'error');
@@ -373,22 +351,25 @@ class AlbertoApp {
   // ===== Engine toggle =====
   toggleEngine(engine) {
     if (engine === 'hermes') {
-      this.toast('Hermes: lazy spawn (ativa em /hermes)', 'info');
-      $('#engine-grid [data-engine="hermes"]').classList.toggle('active');
+      this.toast('Hermes inicia automaticamente quando uma ferramenta compatível é chamada; este cartão não altera o backend.', 'info');
     } else if (engine === 'mimo') {
-      this.toast('MiMo: sempre ligado', 'info');
+      this.toast('MiMo é gerido pelo runtime; este cartão é apenas informativo.', 'info');
     }
   }
 
   // ===== Squads =====
   async loadSquads() {
     try {
-      this.squads = await this.api.squadList();
-    } catch {
-      this.squads = ['engineering', 'research', 'product', 'incident', 'data-ml', 'growth', 'finance', 'support'];
+      const data = await this.api.squadList();
+      this.squads = Array.isArray(data) ? data : (data.squads || []);
+      this.renderSquads();
+      this.updateSquadPanel();
+    } catch (error) {
+      this.squads = [];
+      this.renderSquads();
+      this.toast(`Não foi possível carregar squads: ${error.message}`, 'error');
+      throw error;
     }
-    this.renderSquads();
-    this.updateSquadPanel();
   }
 
   async renderSquads() {
@@ -447,19 +428,29 @@ class AlbertoApp {
   }
 
   async activateSquad(name) {
-    try { await this.api.squadActivate(name); } catch {}
-    this.activeSquad = name;
-    this.toast(`squad "${name}" ativado`, 'success');
-    this.updateSquadPanel();
-    this.renderSquads();
+    try {
+      const result = await this.api.squadActivate(name);
+      if (!result?.ok) throw new Error('O backend não confirmou a ativação.');
+      this.activeSquad = result.active || name;
+      this.toast(`Squad "${this.activeSquad}" ativado`, 'success');
+      this.updateSquadPanel();
+      this.renderSquads();
+    } catch (error) {
+      this.toast(`Falha ao ativar squad: ${error.message}`, 'error');
+    }
   }
 
   async hibernateSquad() {
-    try { await this.api.squadHibernate(); } catch {}
-    this.activeSquad = null;
-    this.toast('squad hibernado', 'info');
-    this.updateSquadPanel();
-    this.renderSquads();
+    try {
+      const result = await this.api.squadHibernate();
+      if (!result?.ok) throw new Error('O backend não confirmou a hibernação.');
+      this.activeSquad = null;
+      this.toast('Squad hibernado', 'success');
+      this.updateSquadPanel();
+      this.renderSquads();
+    } catch (error) {
+      this.toast(`Falha ao hibernar squad: ${error.message}`, 'error');
+    }
   }
 
   async runSquadDemo(name) {
@@ -486,18 +477,16 @@ class AlbertoApp {
 
   // ===== Memory =====
   async loadMemory() {
-    try { this.memory = await this.api.memoryList(); } catch {
-      this.memory = this.mockMemory();
+    try {
+      const data = await this.api.memoryList();
+      this.memory = Array.isArray(data) ? data : (data.items || []);
+      this.renderMemory(this.memory);
+    } catch (error) {
+      this.memory = [];
+      this.renderMemory([]);
+      this.toast(`Não foi possível carregar memória: ${error.message}`, 'error');
+      throw error;
     }
-    this.renderMemory(this.memory);
-  }
-
-  mockMemory() {
-    return [
-      { key: 'user.name', value: 'Você', tags: 'user' },
-      { key: 'project.name', value: 'Alberto AI', tags: 'project' },
-      { key: 'preferences.language', value: 'pt-BR', tags: 'prefs' },
-    ];
   }
 
   renderMemory(items) {
@@ -523,13 +512,9 @@ class AlbertoApp {
     if (!query) { this.renderMemory(this.memory); return; }
     try {
       const hits = await this.api.memorySearch(query);
-      this.renderMemory(hits);
-    } catch {
-      const filtered = this.memory.filter(m =>
-        m.key.toLowerCase().includes(query.toLowerCase()) ||
-        (m.value || '').toLowerCase().includes(query.toLowerCase())
-      );
-      this.renderMemory(filtered);
+      this.renderMemory(Array.isArray(hits) ? hits : (hits.items || []));
+    } catch (error) {
+      this.toast(`Falha na pesquisa de memória: ${error.message}`, 'error');
     }
   }
 
@@ -551,27 +536,29 @@ class AlbertoApp {
     const value = $('#modal-mem-val').value.trim();
     const tags = $('#modal-mem-tags').value.trim();
     if (!key || !value) { this.toast('chave e valor obrigatórios', 'error'); return; }
-    try { await this.api.memorySet(key, value, tags); } catch {}
-    this.memory.unshift({ key, value, tags });
-    this.renderMemory(this.memory);
-    this.closeModal();
-    this.toast(`"${key}" salvo`, 'success');
+    try {
+      const result = await this.api.memorySet(key, value, tags);
+      if (!result?.ok) throw new Error('O backend não confirmou a gravação.');
+      await this.loadMemory();
+      this.closeModal();
+      this.toast(`"${key}" guardado na memória real`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao guardar memória: ${error.message}`, 'error');
+    }
   }
 
   // ===== Shortcuts =====
   async loadShortcuts() {
-    try { this.shortcuts = await this.api.shortcutList(); } catch {
-      this.shortcuts = this.mockShortcuts();
+    try {
+      const data = await this.api.shortcutList();
+      this.shortcuts = data && typeof data === 'object' ? data : {};
+      this.renderShortcuts();
+    } catch (error) {
+      this.shortcuts = {};
+      this.renderShortcuts();
+      this.toast(`Não foi possível carregar atalhos: ${error.message}`, 'error');
+      throw error;
     }
-    this.renderShortcuts();
-  }
-
-  mockShortcuts() {
-    return {
-      ms: { expansion: 'memory search {{args}}', use_count: 3 },
-      gdp: { expansion: 'hermes exec "git diff && (test -z \\"$(git status -s)\\" && git push || echo uncommitted)"', use_count: 1 },
-      hi: { expansion: 'chat "olá, como vai?"', use_count: 7 },
-    };
   }
 
   renderShortcuts() {
@@ -597,47 +584,51 @@ class AlbertoApp {
 
   // ===== Tools =====
   async loadTools() {
-    const tools = [
-      { name: 'memory.set', engine: 'mimo', desc: 'persiste key/value no FTS5', enabled: true },
-      { name: 'memory.get', engine: 'mimo', desc: 'recupera valor por chave', enabled: true },
-      { name: 'memory.search', engine: 'mimo', desc: 'busca full-text na memória', enabled: true },
-      { name: 'goal.set', engine: 'mimo', desc: 'define goal + critérios pro judge', enabled: true },
-      { name: 'judge', engine: 'mimo', desc: 'LLM avalia candidato vs critérios', enabled: true },
-      { name: 'max_mode', engine: 'mimo', desc: 'best-of-N paralelo + judge escolhe', enabled: true },
-      { name: 'compose', engine: 'mimo', desc: 'pipeline spec → tdd → review', enabled: true },
-      { name: 'subagent', engine: 'mimo', desc: 'N sessões paralelas via ThreadPool', enabled: true },
-      { name: 'distill', engine: 'mimo', desc: 'sumariza toda memória em MEMORY.md', enabled: true },
-      { name: 'worktree', engine: 'mimo', desc: 'git worktree por sessão', enabled: false },
-      { name: 'snapshot', engine: 'mimo', desc: 'checkpoint de sessão', enabled: false },
-      { name: 'lsp', engine: 'mimo', desc: 'diagnostics do LSP server', enabled: false },
+    try {
+      const data = await this.api.toolsList();
+      const tools = Array.isArray(data) ? data : (data.tools || []);
+      const grid = $('#tools-grid');
+      grid.innerHTML = '';
+      for (const tool of tools) {
+        const name = tool.name || tool.function?.name || 'tool';
+        const desc = tool.description || tool.function?.description || '';
+        const card = document.createElement('div');
+        card.className = 'tool-card';
+        card.innerHTML = `
+          <div class="tool-header"><div class="tool-name">${this.escapeHtml(name)}</div><div class="tool-engine">backend</div></div>
+          <div class="tool-desc">${this.escapeHtml(desc)}</div>
+          <div class="tool-status"><span class="dot"></span><span>registada no backend</span></div>`;
+        grid.appendChild(card);
+      }
+      if (!tools.length) grid.innerHTML = '<div class="shortcut-empty">O backend não registou ferramentas.</div>';
+    } catch (error) {
+      $('#tools-grid').innerHTML = '<div class="shortcut-empty">Não foi possível carregar ferramentas reais.</div>';
+      this.toast(`Falha ao carregar ferramentas: ${error.message}`, 'error');
+      throw error;
+    }
+  }
 
-      { name: 'browser', engine: 'hermes', desc: 'HTTP fetch + HTML strip', enabled: false },
-      { name: 'code_execution', engine: 'hermes', desc: 'subprocess sandboxed', enabled: true },
-      { name: 'session_search', engine: 'hermes', desc: 'FTS5 session search', enabled: true },
-      { name: 'cron', engine: 'hermes', desc: 'in-process scheduler', enabled: false },
-      { name: 'computer_use', engine: 'hermes', desc: 'screen + click (precisa Xvfb)', enabled: false },
-      { name: 'voice_tts', engine: 'hermes', desc: 'text → speech', enabled: false },
-      { name: 'image_gen', engine: 'hermes', desc: 'text → image', enabled: false },
-      { name: 'video_gen', engine: 'hermes', desc: 'text → video', enabled: false },
-      { name: 'x_search', engine: 'hermes', desc: 'busca no X/Twitter', enabled: false },
-    ];
-    const grid = $('#tools-grid');
-    grid.innerHTML = '';
-    for (const t of tools) {
-      const card = document.createElement('div');
-      card.className = 'tool-card' + (t.enabled ? '' : ' disabled');
-      card.innerHTML = `
-        <div class="tool-header">
-          <div class="tool-name">${this.escapeHtml(t.name)}</div>
-          <div class="tool-engine ${t.engine}">${t.engine}</div>
-        </div>
-        <div class="tool-desc">${this.escapeHtml(t.desc)}</div>
-        <div class="tool-status">
-          <span class="dot ${t.enabled ? '' : 'off'}"></span>
-          <span>${t.enabled ? 'enabled' : 'off (opt-in)'}</span>
-        </div>
-      `;
-      grid.appendChild(card);
+  async loadModels() {
+    try {
+      const models = await this.api.modelList();
+      const container = $('#settings-models');
+      container.innerHTML = '';
+      for (const model of models) {
+        const row = document.createElement('div');
+        row.className = 'kv-row';
+        row.innerHTML = `<span class="lbl">${this.escapeHtml(model.task)}</span><span class="val">${this.escapeHtml(model.provider)}/${this.escapeHtml(model.model_id)}</span>`;
+        container.appendChild(row);
+        const status = document.querySelector(`#m-${CSS.escape(model.task)}`);
+        if (status) {
+          status.textContent = `${model.provider}/${model.model_id}`;
+          status.classList.remove('empty');
+        }
+      }
+      if (!models.length) container.textContent = 'Nenhum modelo configurado no backend.';
+    } catch (error) {
+      $('#settings-models').textContent = 'Não foi possível carregar os modelos.';
+      this.toast(`Falha ao carregar modelos: ${error.message}`, 'error');
+      throw error;
     }
   }
 
@@ -673,11 +664,15 @@ class AlbertoApp {
       this.toast('todos os campos obrigatórios', 'error');
       return;
     }
-    try { await this.api.modelSet(task, provider, modelId, baseUrl, credEnv); } catch {}
-    $(`#m-${task}`).textContent = `${provider}/${modelId}`;
-    $(`#m-${task}`).classList.remove('empty');
-    this.closeModal();
-    this.toast(`${task} → ${provider}/${modelId}`, 'success');
+    try {
+      const result = await this.api.modelSet(task, provider, modelId, baseUrl, credEnv);
+      if (!result?.ok) throw new Error('O backend não confirmou a configuração.');
+      await this.loadModels();
+      this.closeModal();
+      this.toast(`Modelo ${task} guardado no backend.`, 'success');
+    } catch (error) {
+      this.toast(`Falha ao guardar modelo: ${error.message}`, 'error');
+    }
   }
 
   // ===== Modal =====
