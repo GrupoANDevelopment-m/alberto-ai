@@ -844,7 +844,7 @@ class AlbertoApp {
         row.className = 'kv-row';
         row.innerHTML = `<span class="lbl">${this.escapeHtml(model.task)}</span><span class="val">${this.escapeHtml(model.provider)}/${this.escapeHtml(model.model_id)}</span>`;
         container.appendChild(row);
-        const status = document.querySelector(`#m-${CSS.escape(model.task)}`);
+        const status = document.getElementById(`m-${model.task}`);
         if (status) {
           status.textContent = `${model.provider}/${model.model_id}`;
           status.classList.remove('empty');
