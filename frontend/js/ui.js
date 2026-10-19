@@ -228,7 +228,7 @@ class AlbertoApp {
 
     // Reload memory if changed
     if (text.toLowerCase().includes('memory')) {
-      this.loadMemory();
+      this.loadMemory().catch(() => {});
     }
   }
 
