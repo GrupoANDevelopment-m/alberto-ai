@@ -697,9 +697,9 @@ class AlbertoApp {
   openMemoryAddModal() {
     this.openModal('Adicionar à memória', `
       <div style="display:flex; flex-direction:column; gap:12px;">
-        <input id="modal-mem-key" placeholder="chave (ex: user.name)" style="..."/>
-        <textarea id="modal-mem-val" placeholder="valor" rows="4" style="..."></textarea>
-        <input id="modal-mem-tags" placeholder="tags (opcional)" style="..."/>
+        <input id="modal-mem-key" placeholder="chave (ex: user.name)"/>
+        <textarea id="modal-mem-val" placeholder="valor" rows="4"></textarea>
+        <input id="modal-mem-tags" placeholder="tags (opcional)"/>
       </div>
     `, [
       { label: 'cancelar', class: 'ghost-btn', action: () => this.closeModal() },
@@ -862,17 +862,17 @@ class AlbertoApp {
   openModelAddModal() {
     this.openModal('Configurar model', `
       <div style="display:flex; flex-direction:column; gap:12px;">
-        <select id="modal-task" style="...">
+        <select id="modal-task">
           <option value="chat">chat</option>
           <option value="code">code</option>
           <option value="reasoning">reasoning</option>
           <option value="vision">vision</option>
           <option value="embedding">embedding</option>
         </select>
-        <input id="modal-provider" placeholder="provider (ex: nvidia, openai, anthropic)" style="..."/>
-        <input id="modal-modelid" placeholder="model_id (ex: moonshotai/kimi-k2.6)" style="..."/>
-        <input id="modal-baseurl" placeholder="base_url (ex: https://integrate.api.nvidia.com/v1)" style="..."/>
-        <input id="modal-credenv" placeholder="credential_env (ex: NVIDIA_API_KEY)" style="..."/>
+        <input id="modal-provider" placeholder="provider (ex: nvidia, openai, anthropic)"/>
+        <input id="modal-modelid" placeholder="model_id (ex: moonshotai/kimi-k2.6)"/>
+        <input id="modal-baseurl" placeholder="base_url (ex: https://integrate.api.nvidia.com/v1)"/>
+        <input id="modal-credenv" placeholder="credential_env (ex: NVIDIA_API_KEY)"/>
       </div>
     `, [
       { label: 'cancelar', class: 'ghost-btn', action: () => this.closeModal() },
