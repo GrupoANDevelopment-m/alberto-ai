@@ -155,3 +155,39 @@ def test_model_test_endpoint_redacts_secret_even_if_agent_returns_raw_key(monkey
     assert response.status_code == 200
     assert response.json()["OPENAI_API_KEY"] == "***"
     assert secret not in response.text
+
+
+def test_browser_session_login_sets_httponly_cookie_and_authenticates(monkeypatch, tmp_path):
+    app = make_app(monkeypatch, tmp_path, token=TOKEN)
+    client = TestClient(app)
+
+    login = client.post("/api/session/login", json={"token": TOKEN})
+
+    assert login.status_code == 200
+    assert login.json() == {"ok": True}
+    cookie = login.cookies.get("alberto_session")
+    assert cookie == TOKEN
+    assert "httponly" in login.headers["set-cookie"].lower()
+    assert client.get("/api/banner").status_code == 200
+
+
+def test_browser_session_login_rejects_invalid_token(monkeypatch, tmp_path):
+    app = make_app(monkeypatch, tmp_path, token=TOKEN)
+    client = TestClient(app)
+
+    login = client.post("/api/session/login", json={"token": "wrong-token"})
+
+    assert login.status_code == 401
+    assert client.get("/api/banner").status_code == 401
+
+
+def test_browser_session_logout_clears_cookie(monkeypatch, tmp_path):
+    app = make_app(monkeypatch, tmp_path, token=TOKEN)
+    client = TestClient(app)
+    assert client.post("/api/session/login", json={"token": TOKEN}).status_code == 200
+    assert client.get("/api/banner").status_code == 200
+
+    logout = client.post("/api/session/logout")
+
+    assert logout.status_code == 200
+    assert client.get("/api/banner").status_code == 401
