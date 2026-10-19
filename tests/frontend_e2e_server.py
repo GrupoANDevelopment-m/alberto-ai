@@ -73,6 +73,7 @@ class FakeAlberto:
             code_execution=lambda code, language="python": {"ok": True, "output": code},
         )
         self._models = {}
+        self._conversation_counter = 0
 
     def status(self):
         return {
@@ -133,7 +134,11 @@ class FakeAlberto:
 
     def chat(self, prompt, conversation_id=None, new_conversation=False):
         if new_conversation:
-            conversation_id = None
+            self._conversation_counter += 1
+            conversation_id = f"e2e-conversation-{self._conversation_counter}"
+        elif not conversation_id:
+            self._conversation_counter += 1
+            conversation_id = f"e2e-conversation-{self._conversation_counter}"
         return {
             "response": f"E2E backend reply: {prompt}",
             "strategy": {"mode": "solo", "engine": "mimo", "task_routing": "chat"},
