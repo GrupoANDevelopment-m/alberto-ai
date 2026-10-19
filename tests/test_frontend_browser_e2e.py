@@ -68,7 +68,8 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1440, "height": 960})
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.goto(base_url, wait_until="networkidle", timeout=20000)
+            page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
+            page.locator("#status-text").filter(has_text="online").wait_for(timeout=10000)
             assert page.title().startswith("Alberto AI")
             assert page.locator("#status-text").inner_text() == "online"
 
@@ -85,6 +86,18 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
 
             # Conversation ID is retained and reused by the frontend.
             assert page.evaluate("sessionStorage.getItem('alberto.conversationId')") == "e2e-conversation-1"
+
+            # Clear resets both visible transcript and backend conversation identity.
+            page.locator("#btn-clear").click()
+            assert page.locator("#chat-empty").is_visible()
+            assert page.evaluate("sessionStorage.getItem('alberto.conversationId')") is None
+            page.locator("#composer").fill("nova conversa depois de limpar")
+            page.locator("#send-btn").click()
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('.msg.assistant .msg-content')].some(el => el.textContent.includes('E2E backend reply: nova conversa'))",
+                timeout=10000,
+            )
+            assert page.evaluate("sessionStorage.getItem('alberto.conversationId')") == "e2e-conversation-2"
 
             # Memory write is confirmed by the API and reloaded from backend state.
             page.get_by_role("button", name="Memória").click()
