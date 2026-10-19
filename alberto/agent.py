@@ -165,7 +165,7 @@ class Alberto:
         """
         # Get or create conversation
         conv = None
-        if conversation_id:
+        if conversation_id and not new_conversation:
             conv = self.conversations.get(conversation_id)
         if conv is None and not new_conversation:
             # Continue most recent active conversation if <10 min old unless
