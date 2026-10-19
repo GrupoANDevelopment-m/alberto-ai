@@ -99,12 +99,8 @@ class AlbertoApp {
 
   applyStatus(status) {
     if (!status) return;
-    if (status.mimo?.running) {
-      $('#engine-grid [data-engine="mimo"]').classList.add('active');
-    }
-    if (status.hermes?.running) {
-      $('#engine-grid [data-engine="hermes"]').classList.add('active');
-    }
+    $('#engine-grid [data-engine="mimo"]').classList.toggle('active', Boolean(status.mimo?.running));
+    $('#engine-grid [data-engine="hermes"]').classList.toggle('active', Boolean(status.hermes?.running));
     if (status.active_squad) {
       this.activeSquad = status.active_squad;
       this.updateSquadPanel();
@@ -112,13 +108,9 @@ class AlbertoApp {
     const models = status.models || [];
     ['chat', 'code', 'reasoning'].forEach((t) => {
       const el = $(`#m-${t}`);
-      if (models.includes(t)) {
-        el.textContent = 'configured';
-        el.classList.remove('empty');
-      } else {
-        el.textContent = 'not set';
-        el.classList.add('empty');
-      }
+      if (!el) return;
+      el.textContent = models.includes(t) ? 'configured' : 'not set';
+      el.classList.toggle('empty', !models.includes(t));
     });
   }
 
@@ -246,10 +238,10 @@ class AlbertoApp {
                     strategy.mode === 'squad' ? '👥' : '⚡';
       strategyHtml = `<div class="msg-strategy strategy-${strategy.mode}">
         <span class="glyph">${glyph}</span>
-        <span class="strategy-mode">${strategy.mode}</span>
+        <span class="strategy-mode">${this.escapeHtml(strategy.mode)}</span>
         <span>·</span>
-        <span>${strategy.engine}</span>
-        ${strategy.squad ? `<span>·</span><span>${strategy.squad}</span>` : ''}
+        <span>${this.escapeHtml(strategy.engine)}</span>
+        ${strategy.squad ? `<span>·</span><span>${this.escapeHtml(strategy.squad)}</span>` : ''}
       </div>`;
     }
 
@@ -320,8 +312,11 @@ class AlbertoApp {
       this.toast('Aguarde a resposta atual antes de limpar a conversa.', 'info');
       return;
     }
-    $('#chat-scroll').innerHTML = '';
-    $('#chat-empty').style.display = 'flex';
+    const scroll = $('#chat-scroll');
+    const empty = $('#chat-empty');
+    scroll.innerHTML = '';
+    scroll.appendChild(empty);
+    empty.style.display = 'flex';
     this.conversationId = null;
     sessionStorage.removeItem('alberto.conversationId');
   }
@@ -403,7 +398,7 @@ class AlbertoApp {
       card.className = 'squad-card' + (this.activeSquad === name ? ' active' : '');
       card.innerHTML = `
         <div class="squad-card-header">
-          <div class="squad-name">${meta.emoji} ${name}</div>
+          <div class="squad-name">${meta.emoji} ${this.escapeHtml(name)}</div>
           <div class="squad-badge">${this.activeSquad === name ? 'ATIVO' : 'OPT-IN'}</div>
         </div>
         <div class="squad-description">${meta.desc}</div>
@@ -464,7 +459,7 @@ class AlbertoApp {
     if (this.activeSquad) {
       panel.innerHTML = `
         <div class="squad-active">
-          <div class="squad-active-name">⚡ ${this.activeSquad}</div>
+          <div class="squad-active-name">⚡ ${this.escapeHtml(this.activeSquad)}</div>
           <div class="squad-active-stage">próximo /ask → squad pipeline</div>
         </div>
       `;
@@ -502,7 +497,7 @@ class AlbertoApp {
       item.innerHTML = `
         <div class="memory-key">${this.escapeHtml(m.key)}</div>
         <div class="memory-value">${this.escapeHtml((m.value || '').slice(0, 200))}</div>
-        <div class="memory-tags">${m.tags || ''}</div>
+        <div class="memory-tags">${this.escapeHtml(m.tags || '')}</div>
       `;
       list.appendChild(item);
     }
@@ -776,7 +771,7 @@ class AlbertoApp {
       <div class="msg-avatar">🔧</div>
       <div class="msg-body">
         <div class="msg-meta">
-          <span class="role">tool: ${tc.tool}</span>
+          <span class="role">tool: ${this.escapeHtml(tc.tool || 'unknown')}</span>
           <span>${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
         <div class="msg-content"><pre><code>${this.escapeHtml(JSON.stringify(result, null, 2).slice(0, 1500))}</code></pre></div>
