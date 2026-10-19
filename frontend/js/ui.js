@@ -16,6 +16,7 @@ class AlbertoApp {
     this.squads = [];
     this.memory = [];
     this.conversationId = sessionStorage.getItem('alberto.conversationId') || null;
+    this.newConversation = !this.conversationId;
     this.isSending = false;
     this.bindEvents();
     this.init();
@@ -179,6 +180,8 @@ class AlbertoApp {
     let finalStrategy = strategy;
     let finalToolCalls = [];
     let finalConvId = null;
+    let streamError = null;
+    const startNewConversation = this.newConversation;
     try {
       await this.api.chat(text, (chunk) => {
         if (chunk.type === 'text') {
@@ -191,13 +194,18 @@ class AlbertoApp {
           if (chunk.tool_calls) finalToolCalls = chunk.tool_calls;
           if (chunk.conversation_id) finalConvId = chunk.conversation_id;
         } else if (chunk.type === 'error') {
-          responseText = `Erro do backend: ${chunk.error || 'falha não especificada'}`;
+          streamError = chunk.error || 'falha não especificada';
         }
-      }, this.conversationId);
+      }, this.conversationId, startNewConversation);
+      if (streamError) throw new Error(streamError);
       if (finalConvId) {
         this.conversationId = finalConvId;
         sessionStorage.setItem('alberto.conversationId', finalConvId);
       }
+      this.newConversation = false;
+      $('#status-dot').classList.remove('error');
+      $('#status-dot').classList.add('online');
+      $('#status-text').textContent = 'online';
       if (!responseText.trim()) throw new Error('O backend terminou o stream sem conteúdo.');
     } catch (e) {
       responseText = `Não foi possível obter resposta real do Alberto: ${e.message}`;
@@ -318,6 +326,7 @@ class AlbertoApp {
     scroll.appendChild(empty);
     empty.style.display = 'flex';
     this.conversationId = null;
+    this.newConversation = true;
     sessionStorage.removeItem('alberto.conversationId');
   }
 
