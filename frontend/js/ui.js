@@ -151,9 +151,8 @@ class AlbertoApp {
   async sendPrompt() {
     const composer = $('#composer');
     const text = composer.value.trim();
-    if (!text) return;
-
-    if (this.isSending) return;
+    if (!text || this.isSending) return;
+    if (await this.handleSlashCommand(text)) return;
     this.isSending = true;
     $('#send-btn').disabled = true;
     $('#chat-empty').style.display = 'none';
@@ -231,6 +230,66 @@ class AlbertoApp {
     if (text.toLowerCase().includes('memory')) {
       this.loadMemory();
     }
+  }
+
+  async handleSlashCommand(text) {
+    const addMatch = text.match(/^\/s\s+add\s+(\S+)\s+([\s\S]+)$/i);
+    const removeMatch = text.match(/^\/s\s+remove\s+(\S+)\s*$/i);
+    const useMatch = text.match(/^\/s\s+(\S+)(?:\s+([\s\S]+))?$/i);
+    const squadMatch = text.match(/^\/aiox-squad\s+activate\s+(\S+)\s*$/i);
+    const browserMatch = text.match(/^\/hermes\s+browser\s+(https?:\/\/\S+)\s*$/i);
+    const isStrategy = /^\/strategy\s*$/i.test(text);
+    const isHelp = /^\/(?:help|commands)\s*$/i.test(text);
+    if (!addMatch && !removeMatch && !useMatch && !squadMatch && !browserMatch && !isStrategy && !isHelp) return false;
+
+    const composer = $('#composer');
+    this.isSending = true;
+    $('#send-btn').disabled = true;
+    composer.value = '';
+    this.autoresizeComposer();
+    $('#chat-empty').style.display = 'none';
+    this.appendMessage('user', text);
+    try {
+      if (addMatch) {
+        const result = await this.api.shortcutAdd(addMatch[1], addMatch[2].trim());
+        if (!result?.ok) throw new Error('O backend não confirmou a criação do atalho.');
+        await this.loadShortcuts();
+        this.appendMessage('assistant', `Atalho "${addMatch[1]}" guardado no backend.`);
+      } else if (removeMatch) {
+        const result = await this.api.shortcutRemove(removeMatch[1]);
+        if (!result?.ok) throw new Error('O backend não confirmou a remoção do atalho.');
+        await this.loadShortcuts();
+        this.appendMessage('assistant', `Atalho "${removeMatch[1]}" removido do backend.`);
+      } else if (useMatch) {
+        const result = await this.api.shortcutUse(useMatch[1], useMatch[2] || '');
+        composer.value = result.expansion || '';
+        this.autoresizeComposer();
+        composer.focus();
+        this.appendMessage('assistant', 'Atalho expandido no compositor. Revise o conteúdo e envie para executar.');
+      } else if (squadMatch) {
+        const result = await this.api.squadActivate(squadMatch[1]);
+        if (!result?.ok) throw new Error('O backend não confirmou a ativação do squad.');
+        this.activeSquad = result.active || squadMatch[1];
+        this.updateSquadPanel();
+        await this.renderSquads();
+        this.appendMessage('assistant', `Squad "${this.activeSquad}" ativado no backend.`);
+      } else if (browserMatch) {
+        const result = await this.api.hermesBrowser(browserMatch[1]);
+        this.appendMessage('assistant', typeof result.text === 'string' ? result.text : JSON.stringify(result, null, 2));
+      } else if (isStrategy) {
+        const result = await this.api.strategy(text);
+        this.appendMessage('assistant', JSON.stringify(result, null, 2));
+      } else if (isHelp) {
+        this.appendMessage('assistant', 'Comandos: /s add <chave> <expansão>; /s remove <chave>; /s <chave> [argumentos]; /aiox-squad activate <nome>; /hermes browser <URL>; /strategy.');
+      }
+    } catch (error) {
+      this.appendMessage('assistant', `Comando falhou: ${error.message}`);
+      this.toast(`Falha no comando: ${error.message}`, 'error');
+    } finally {
+      this.isSending = false;
+      $('#send-btn').disabled = false;
+    }
+    return true;
   }
 
   appendMessage(role, content, strategy = null) {
@@ -803,8 +862,7 @@ class AlbertoApp {
 
   updatePaletteResults(query) {
     const all = [
-      { glyph: '⚡', name: 'modo solo', cmd: 'engine=mimo', action: () => {} },
-      { glyph: '🎲', name: 'modo speculative (max)', cmd: 'engine=mimo', action: () => {} },
+      { glyph: '↺', name: 'nova conversa', cmd: 'limpar chat', action: () => this.clearChat() },
       { glyph: '👥', name: 'ativar squad engineering', cmd: '/aiox-squad activate engineering', action: () => this.activateSquad('engineering') },
       { glyph: '🔬', name: 'ativar squad research', cmd: '/aiox-squad activate research', action: () => this.activateSquad('research') },
       { glyph: '🎯', name: 'ativar squad product', cmd: '/aiox-squad activate product', action: () => this.activateSquad('product') },
@@ -813,9 +871,9 @@ class AlbertoApp {
       { glyph: '📈', name: 'ativar squad growth', cmd: '/aiox-squad activate growth', action: () => this.activateSquad('growth') },
       { glyph: '💰', name: 'ativar squad finance', cmd: '/aiox-squad activate finance', action: () => this.activateSquad('finance') },
       { glyph: '🎧', name: 'ativar squad support', cmd: '/aiox-squad activate support', action: () => this.activateSquad('support') },
-      { glyph: '🧠', name: 'mostrar estratégia', cmd: '/strategy', action: () => {} },
+      { glyph: '🧠', name: 'mostrar estratégia', cmd: '/strategy', action: () => { $('#composer').value = '/strategy'; this.sendPrompt(); } },
       { glyph: '🔍', name: 'buscar memória', cmd: '/memory search', action: () => this.switchView('memory') },
-      { glyph: '🌐', name: 'abrir browser', cmd: '/hermes browser', action: () => {} },
+      { glyph: '🌐', name: 'abrir browser', cmd: '/hermes browser <URL>', action: () => { $('#composer').value = '/hermes browser '; $('#composer').focus(); } },
       { glyph: '⚙️', name: 'configurações', cmd: '/config', action: () => this.switchView('settings') },
     ];
     const q = query.toLowerCase();
