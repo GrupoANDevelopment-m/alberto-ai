@@ -41,6 +41,10 @@ from alberto.tools_registry import list_tools, invoke_tool
 
 
 # ===== Pydantic models =====
+class SessionLoginRequest(BaseModel):
+    token: str
+
+
 class ChatRequest(BaseModel):
     prompt: str
     squad: Optional[str] = None
@@ -119,18 +123,18 @@ def create_app(alberto: Optional[Alberto] = None,
     async def require_api_auth(request: Request, call_next):
         token = os.environ.get("ALBERTO_API_TOKEN", "")
         is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
-        protected_path = request.url.path.startswith("/api/") or (
+        is_session_login = request.url.path == "/api/session/login" and request.method == "POST"
+        protected_path = (request.url.path.startswith("/api/") and not is_session_login) or (
             not is_production
             and request.url.path in {"/__docs", "/__redoc", "/openapi.json"}
         )
         if protected_path and (token or is_production):
             authorization = request.headers.get("authorization", "")
             scheme, separator, supplied = authorization.partition(" ")
-            if (
-                not separator
-                or scheme.lower() != "bearer"
-                or not hmac.compare_digest(supplied, token)
-            ):
+            bearer_ok = bool(separator and scheme.lower() == "bearer" and hmac.compare_digest(supplied, token))
+            cookie_token = request.cookies.get("alberto_session", "")
+            cookie_ok = bool(cookie_token and hmac.compare_digest(cookie_token, token))
+            if not (bearer_ok or cookie_ok):
                 return JSONResponse(
                     status_code=401,
                     content={"error": "authentication required"},
@@ -148,6 +152,31 @@ def create_app(alberto: Optional[Alberto] = None,
         d = frontend_dir / sub
         if d.exists():
             app.mount(f"/{sub}", StaticFiles(directory=str(d)), name=sub)
+
+    # Exchange the long-lived token for an HttpOnly same-site browser session.
+    @app.post("/api/session/login")
+    async def session_login(req: SessionLoginRequest):
+        configured_token = os.environ.get("ALBERTO_API_TOKEN", "")
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        if not configured_token or not hmac.compare_digest(req.token, configured_token):
+            raise HTTPException(status_code=401, detail="invalid access token")
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            key="alberto_session",
+            value=configured_token,
+            httponly=True,
+            secure=is_production,
+            samesite="strict",
+            path="/api",
+            max_age=8 * 60 * 60,
+        )
+        return response
+
+    @app.post("/api/session/logout")
+    async def session_logout():
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(key="alberto_session", path="/api", httponly=True, samesite="strict")
+        return response
 
     # ===== Identity =====
     @app.get("/api/banner")
