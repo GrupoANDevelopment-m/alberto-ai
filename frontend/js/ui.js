@@ -677,8 +677,8 @@ class AlbertoApp {
     try {
       const result = await this.api.memoryDelete(key);
       if (!result?.ok) throw new Error('O backend não confirmou a eliminação.');
-      await this.loadMemory();
       this.toast(`Memória "${key}" eliminada.`, 'success');
+      await this.loadMemory().catch(() => {});
     } catch (error) {
       this.toast(`Falha ao eliminar memória: ${error.message}`, 'error');
     }
@@ -715,9 +715,9 @@ class AlbertoApp {
     try {
       const result = await this.api.memorySet(key, value, tags);
       if (!result?.ok) throw new Error('O backend não confirmou a gravação.');
-      await this.loadMemory();
       this.closeModal();
       this.toast(`"${key}" guardado na memória real`, 'success');
+      await this.loadMemory().catch(() => {});
     } catch (error) {
       this.toast(`Falha ao guardar memória: ${error.message}`, 'error');
     }
@@ -789,9 +789,9 @@ class AlbertoApp {
     try {
       const result = await this.api.shortcutAdd(key, expansion);
       if (!result?.ok) throw new Error('O backend não confirmou a gravação.');
-      await this.loadShortcuts();
       this.closeModal();
       this.toast(`Atalho "${key}" guardado no backend.`, 'success');
+      await this.loadShortcuts().catch(() => {});
     } catch (error) {
       this.toast(`Falha ao guardar atalho: ${error.message}`, 'error');
     }
@@ -801,8 +801,8 @@ class AlbertoApp {
     try {
       const result = await this.api.shortcutRemove(key);
       if (!result?.ok) throw new Error('O backend não confirmou a eliminação.');
-      await this.loadShortcuts();
       this.toast(`Atalho "${key}" eliminado.`, 'success');
+      await this.loadShortcuts().catch(() => {});
     } catch (error) {
       this.toast(`Falha ao eliminar atalho: ${error.message}`, 'error');
     }
@@ -893,9 +893,9 @@ class AlbertoApp {
     try {
       const result = await this.api.modelSet(task, provider, modelId, baseUrl, credEnv);
       if (!result?.ok) throw new Error('O backend não confirmou a configuração.');
-      await this.loadModels();
       this.closeModal();
       this.toast(`Modelo ${task} guardado no backend.`, 'success');
+      await this.loadModels().catch(() => {});
     } catch (error) {
       this.toast(`Falha ao guardar modelo: ${error.message}`, 'error');
     }
