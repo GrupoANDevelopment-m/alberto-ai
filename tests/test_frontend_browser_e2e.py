@@ -153,7 +153,7 @@ def test_frontend_chat_memory_squad_navigation_and_responsive_layout():
             # Model configuration is reflected from the backend, not only local text.
             page.set_viewport_size({"width": 390, "height": 844})
             page.get_by_role("button", name="Config").click()
-            assert page.locator('[data-view="settings"]').evaluate("(el) => el.classList.contains('active')")
+            assert page.locator('main.view[data-view="settings"]').evaluate("(el) => el.classList.contains('active')")
             assert page.locator("#settings-add-model").is_visible()
             page.locator("#settings-add-model").click()
             page.locator("#modal-task").select_option("chat")
