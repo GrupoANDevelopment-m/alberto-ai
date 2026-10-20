@@ -17,11 +17,41 @@ def test_live_agent_remembers_conversation_and_executes_real_tool(tmp_path, monk
     if not os.environ.get("NVIDIA_API_KEY"):
         pytest.skip("NVIDIA_API_KEY is required for live-provider tests")
 
+    from openai import OpenAI
+
     from alberto.agent import Alberto
     from alberto.sandbox import LocalSandbox
     from alberto.runtime.function_caller import run_tool_loop
 
     model_id = os.environ.get("ALBERTO_LIVE_MODEL_ID", "nvidia/nemotron-3.5-lightning-30b-a3b")
+
+    # First isolate provider connectivity/auth/model availability from Alberto's
+    # router. This direct request is intentionally the first network operation.
+    client = OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=os.environ["NVIDIA_API_KEY"],
+        timeout=45.0,
+        max_retries=0,
+    )
+    probe = client.chat.completions.create(
+        model=model_id,
+        messages=[
+            {"role": "user", "content": "Reply with exactly: NVIDIA_API_OK"}
+        ],
+        temperature=1.0,
+        top_p=0.95,
+        max_tokens=64,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+    )
+    assert probe.choices and probe.choices[0].message, (
+        f"NVIDIA API returned no chat choice for model {model_id!r}"
+    )
+    probe_text = probe.choices[0].message.content or ""
+    assert probe_text.strip(), (
+        f"NVIDIA API endpoint responded but returned empty content for {model_id!r}; "
+        f"finish_reason={probe.choices[0].finish_reason!r}"
+    )
+    client.close()
     sandbox = LocalSandbox(base_dir=tmp_path / "alberto-live-sandbox", allow_net=True)
     agent = Alberto(sandbox=sandbox)
 
