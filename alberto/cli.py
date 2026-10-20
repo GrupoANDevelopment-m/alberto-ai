@@ -115,7 +115,7 @@ def cmd_model(args, alberto: Alberto) -> int:
             print(f"no model configured for task '{args.task}'")
             return 1
         for k, v in env.items():
-            masked = v if k != "OPENAI_API_KEY" else v[:6] + "***"
+            masked = ("***" if v else "") if k == "OPENAI_API_KEY" else v
             print(f"{k}={masked}")
     return 0
 
@@ -244,7 +244,11 @@ def cmd_mcp(args, alberto):
         print(f"disconnected {args.mcp_args[0]}")
     elif a == "call" and len(args.mcp_args) >= 2:
         import json
-        tool_args = json.loads(args.mcp_args[2]) if len(args.mcp_args) > 2 else {}
+        try:
+            tool_args = json.loads(args.mcp_args[2]) if len(args.mcp_args) > 2 else {}
+        except (json.JSONDecodeError, TypeError) as exc:
+            print(f"invalid JSON tool arguments: {exc}", file=sys.stderr)
+            return 1
         result = alberto.mcp.call(args.mcp_args[0], args.mcp_args[1], tool_args)
         print(json.dumps(result, indent=2))
     return 0
@@ -328,32 +332,11 @@ def cmd_skill(args, alberto):
             print(f"\n--- block {i+1} ({b['lang']}) ---")
             print(b["code"][:400])
     elif a == "run-all" and args.skill_args:
-        from alberto.runtime.skill_engine import find_skill, extract_code_blocks, substitute_args
-        import subprocess
-        path = find_skill(args.skill_args[0])
-        if not path:
-            print(f"skill '{args.skill_args[0]}' not found", file=sys.stderr)
-            return 1
-        content = path.read_text(encoding="utf-8", errors="replace")
-        blocks = extract_code_blocks(content)
-        rargs = args.skill_args[1:]
-        for i, b in enumerate(blocks):
-            if b["lang"] not in ("bash", "sh", "shell", "python", "python3", "py"):
-                continue
-            code = substitute_args(b["code"], rargs)
-            print(f"\n--- block {i+1} ({b['lang']}) ---")
-            try:
-                if b["lang"] in ("python", "python3", "py"):
-                    cmd = [sys.executable, "-c", code]
-                else:
-                    cmd = ["bash", "-c", code]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
-                if result.stdout:
-                    print(result.stdout, end="")
-                if result.stderr:
-                    print(result.stderr, end="", file=sys.stderr)
-            except subprocess.TimeoutExpired:
-                print(f"timeout after {args.timeout}s", file=sys.stderr)
+        # Delegate to the security-hardened skill engine. A second execution
+        # implementation here could bypass its sandbox and approval policy.
+        from alberto.runtime.skill_engine import main as skill_main
+        return skill_main(["run-all", "--timeout", str(args.timeout), "--", *args.skill_args])
+
     return 0
 
 
@@ -649,7 +632,7 @@ def cmd_fallback(args, alberto):
 
 
 def main(argv: List[str] | None = None) -> int:
-    argv = argv or sys.argv[1:]
+    argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog="alberto", description=f"{NAME} v{VERSION}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -824,6 +807,23 @@ def main(argv: List[str] | None = None) -> int:
 
 
     args = parser.parse_args(argv)
+
+    # Validate positional tails before handlers access attributes that are only
+    # populated when enough arguments were supplied.
+    required_args = {
+        "memory": {"set": 2, "get": 1, "search": 1},
+        "model": {"set": 5, "test": 1},
+        "squad": {"describe": 1, "activate": 1, "run": 2},
+        "s": {"add": 2, "rm": 1, "show": 1, "use": 1},
+        "hermes": {"browser": 1, "exec": 1},
+    }
+    if args.cmd in required_args:
+        minimum = required_args[args.cmd].get(args.action, 0)
+        supplied = getattr(args, "args", [])
+        if len(supplied) < minimum:
+            parser.error(
+                f"{args.cmd} {args.action} requires at least {minimum} positional argument(s)"
+            )
 
     # Map remaining args
     if args.cmd == "memory":

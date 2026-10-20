@@ -87,30 +87,50 @@ def list_aiox_workflows() -> List[str]:
 
 
 def run_aiox_workflow(name: str, alberto, input_data: Optional[Dict] = None) -> Dict[str, Any]:
-    """Execute an AIOX workflow by name.
+    """Load and validate an AIOX workflow without claiming skipped steps ran.
 
-    Real AIOX runs via the aiox CLI; for now we parse the YAML and
-    execute the steps in sequence using existing Alberto tools.
+    Actual execution is not implemented in this adapter; callers must use the
+    AIOX CLI. Workflow names are confined to the supported workflows directory.
     """
     try:
         import yaml
-        base = Path(__file__).parent.parent.parent / "upstream" / "aiox" / "squads" / "claude-code-mastery" / "workflows"
-        wf_path = base / f"{name}.yaml"
-        if not wf_path.exists():
+        base = (
+            Path(__file__).parent.parent.parent
+            / "upstream" / "aiox" / "squads" / "claude-code-mastery" / "workflows"
+        ).resolve()
+        requested = Path(str(name))
+        # Accept either the listed filename (wf-name.yaml) or its stem (wf-name).
+        filename = requested.name if requested.suffix.lower() in {".yaml", ".yml"} else f"{requested.name}.yaml"
+        wf_path = (base / filename).resolve()
+        if wf_path.parent != base or not wf_path.is_file():
             return {"ok": False, "error": f"workflow {name} not found"}
-        with open(wf_path) as f:
+        with wf_path.open(encoding="utf-8") as f:
             wf = yaml.safe_load(f)
+        if not isinstance(wf, dict):
+            return {"ok": False, "error": f"workflow {name} must contain a YAML mapping"}
         steps = wf.get("steps", [])
+        if not isinstance(steps, list):
+            return {"ok": False, "error": f"workflow {name} has invalid steps: expected a list"}
         results = []
         for step in steps:
-            step_name = step.get("name", "?")
-            step_type = step.get("type", "llm_call")
-            results.append({"step": step_name, "type": step_type, "status": "skipped (AIOX harness requires aiox CLI)"})
-        return {"ok": True, "workflow": name, "steps": results, "note": "AIOX workflows loaded but execution requires aiox CLI (npm install -g @aiox/cli)"}
+            if not isinstance(step, dict):
+                return {"ok": False, "error": f"workflow {name} contains a non-mapping step"}
+            results.append({
+                "step": str(step.get("name", "?")),
+                "type": str(step.get("type", "llm_call")),
+                "status": "not_executed",
+            })
+        return {
+            "ok": False,
+            "status": "not_executed",
+            "workflow": wf_path.stem,
+            "steps": results,
+            "error": "AIOX workflow was loaded but not executed; install and invoke the AIOX CLI to run it.",
+        }
     except ImportError:
         return {"ok": False, "error": "pyyaml not installed"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": f"could not load workflow: {e}"}
 
 
 # ===================== NemoClaw integration =====================

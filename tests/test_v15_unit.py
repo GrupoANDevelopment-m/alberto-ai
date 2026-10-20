@@ -144,7 +144,7 @@ class TestNemoClawSecrets:
 
     @pytest.mark.parametrize("secret_text,expected_match", [
         # Note: regex patterns require specific formats
-        ("nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234", True),
+        ("nvapi-" + ("T" * 64), True),
         ("sk-proj-1234567890abcdefghij1234567890", True),
         ("sk-ant-api03-1234567890abcdefghij12345678", True),
         # GitHub tokens need 36+ chars after prefix
@@ -220,12 +220,11 @@ class TestNemoClawRedactSecrets:
 
     def test_redact_nvidia_key(self):
         from alberto.runtime.nemoclaw_real import redact_secrets
-        content = "Here is my key: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        test_key = "nvapi-" + ("T" * 64)
+        content = f"Here is my key: {test_key}"
         redacted, findings = redact_secrets(content)
-        # The full secret should not be in the redacted output
-        assert "nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234" not in redacted
+        assert test_key not in redacted
         assert len(findings) > 0
-        # Pattern name should be in findings
         assert any("NVIDIA" in m["pattern"] for m in findings)
 
     def test_redact_no_secrets(self):
@@ -730,3 +729,35 @@ class TestConversationModule:
     def test_alberto_system_prompt_callable(self):
         from alberto.conversation import ALBERTO_SYSTEM_PROMPT
         assert callable(ALBERTO_SYSTEM_PROMPT) or isinstance(ALBERTO_SYSTEM_PROMPT, str)
+
+class TestCompoundIntentRouting:
+    def test_compound_request_preserves_research_and_code_needs(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("criar um app e pesquise sobre OAuth na internet")
+        assert decision.needs_code is True
+        assert decision.needs_research is True
+        assert "combined intents" in decision.reasoning
+
+    def test_compound_security_and_deployment_needs_are_preserved(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("security test e deploy da aplicação")
+        assert decision.needs_security is True
+        assert decision.needs_deploy is True
+
+    def test_empty_request_has_zero_confidence_and_no_tool_hint(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("   ")
+        assert decision.confidence == 0.0
+        assert decision.tool_hint is None
+
+
+class TestRouterValidationRequirement:
+    def test_code_request_mentions_validation_when_tests_are_requested(self):
+        from alberto.runtime.smart_router_v2 import route_intent
+
+        decision = route_intent("criar um app e executar testes")
+        assert decision.needs_code is True
+        assert "validation/testing requirement detected" in decision.reasoning

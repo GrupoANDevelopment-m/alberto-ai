@@ -25,10 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Real API setup
 # ============================================================================
 
-NVIDIA_KEY = os.environ.get(
-    "NVIDIA_API_KEY",
-    "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"  # working key
-)
+NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
 
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 NVIDIA_GENAI = "https://ai.api.nvidia.com/v1/genai"
@@ -164,7 +161,7 @@ class TestRealToolCalling:
 class TestRealImageGeneration:
     """Real image generation via the Qwen image key."""
 
-    QWEN_KEY = "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"
+    QWEN_KEY = os.environ.get("QWEN_KEY", "")
 
     @pytest.mark.skipif(
         not os.environ.get("QWEN_KEY"),
@@ -235,10 +232,11 @@ class TestRealHermesTools:
     def test_real_terminal_runs_command(self, tmp_path):
         """Real hermes terminal runs actual commands."""
         from alberto.engines.hermes_tools import tool_terminal
+        from alberto.sandbox.base import LocalSandbox
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+        alberto = FakeAlberto(tmp_path / "sandbox")
         result = tool_terminal(alberto, {"command": "echo hello-world-test", "timeout": 5})
         # Returns dict like {"ok": True, "stdout": "...", "stderr": "", "returncode": 0}
         assert isinstance(result, dict)
@@ -246,46 +244,51 @@ class TestRealHermesTools:
             assert "hello-world-test" in result.get("stdout", "")
 
     def test_real_file_read_write(self, tmp_path):
-        """Real hermes file tool."""
+        """Hermes file operations are confined to the configured sandbox."""
         from alberto.engines.hermes_tools import tool_file
+        from alberto.sandbox.base import LocalSandbox
+
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
-        # Write
-        write_result = tool_file(alberto, {
-            "action": "write",
-            "path": str(tmp_path / "real-test.txt"),
-            "content": "real-content-12345",
-        })
-        # Read back
-        read_result = tool_file(alberto, {
-            "action": "read",
-            "path": str(tmp_path / "real-test.txt"),
-        })
-        # Both should be dicts
-        assert isinstance(write_result, dict)
-        assert isinstance(read_result, dict)
-        # Read should contain the content
-        read_content = read_result.get("content", "") or str(read_result)
-        assert "real-content-12345" in read_content
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+
+        alberto = FakeAlberto(tmp_path / "file-sandbox")
+        try:
+            write_result = tool_file(alberto, {
+                "action": "write",
+                "path": "real-test.txt",
+                "content": "real-content-12345",
+            })
+            read_result = tool_file(alberto, {
+                "action": "read",
+                "path": "real-test.txt",
+            })
+            assert write_result.get("ok") is True, write_result
+            assert read_result.get("ok") is True, read_result
+            assert "real-content-12345" in read_result.get("content", "")
+        finally:
+            alberto.sandbox.cleanup()
+
 
     def test_real_code_execution(self, tmp_path):
-        """Real hermes code_execution runs Python."""
+        """Python code execution must run through the configured sandbox."""
         from alberto.engines.hermes_tools import tool_code_execution
+        from alberto.sandbox.base import LocalSandbox
+
         class FakeAlberto:
             def __init__(self, base_dir):
-                self.sandbox_base = str(base_dir)
-        alberto = FakeAlberto(str(tmp_path))
-        result = tool_code_execution(alberto, {
-            "language": "python",
-            "code": "print(2 + 2)",
-        })
-        # Returns dict like {"ok": True, "output": "4\n", ...}
-        assert isinstance(result, dict)
-        if result.get("ok"):
-            output = str(result.get("output", "") or result.get("stdout", ""))
-            assert "4" in output
+                self.sandbox = LocalSandbox(base_dir=base_dir)
+
+        alberto = FakeAlberto(tmp_path / "code-sandbox")
+        try:
+            result = tool_code_execution(alberto, {
+                "language": "python",
+                "code": "print(2 + 2)",
+            })
+            assert result.get("ok") is True, result
+            assert "4" in result.get("stdout", "")
+        finally:
+            alberto.sandbox.cleanup()
 
 
 # ============================================================================
@@ -298,7 +301,7 @@ class TestRealNemoClawSecurity:
     def test_scan_secrets_real(self):
         """Real scan_secrets catches real secrets."""
         from alberto.runtime.nemoclaw_real import scan_secrets
-        text = "API key: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        text = "API key: " + "nvapi-" + ("T" * 64)
         findings = scan_secrets(text)
         assert len(findings) > 0
         assert any("NVIDIA" in f["pattern"] for f in findings)
@@ -313,10 +316,10 @@ class TestRealNemoClawSecurity:
     def test_redact_secrets_real(self):
         """Real redact_secrets actually redacts."""
         from alberto.runtime.nemoclaw_real import redact_secrets
-        text = "secret: nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234"
+        text = "secret: " + "nvapi-" + ("T" * 64)
         redacted, findings = redact_secrets(text)
         # The full secret must NOT be in redacted output
-        assert "nvapi-abc123def456ghi789jklmnopqrstuvwxyz1234" not in redacted
+        assert ("nvapi-" + ("T" * 64)) not in redacted
         assert len(findings) > 0
 
     def test_env_leak_real(self):
@@ -600,12 +603,20 @@ class TestRealFunctionCaller:
         # Cleanup
         del TOOL_REGISTRY["_test_real_tool"]
 
-    def test_real_run_shell(self):
-        """Real tool_run_shell executes shell."""
+    def test_real_run_shell(self, tmp_path):
+        """Shell execution requires and uses the configured sandbox."""
         from alberto.runtime.function_caller import tool_run_shell
-        out, is_err = tool_run_shell(None, {"command": "echo real-shell-test", "timeout": 5})
-        assert "real-shell-test" in out
-        assert is_err is False
+        from alberto.sandbox.base import LocalSandbox
+        class FakeAlberto:
+            def __init__(self):
+                self.sandbox = LocalSandbox(base_dir=tmp_path / "shell")
+        alberto = FakeAlberto()
+        try:
+            out, is_err = tool_run_shell(alberto, {"command": "echo real-shell-test", "timeout": 5})
+            assert "real-shell-test" in out
+            assert is_err is False
+        finally:
+            alberto.sandbox.cleanup()
 
 
 # ============================================================================

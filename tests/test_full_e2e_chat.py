@@ -23,16 +23,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-REPO = Path("/workspace/alberto-ai")
+REPO = Path(__file__).resolve().parents[1]
 os.chdir(REPO)
 
 ENV = os.environ.copy()
 ENV.update({
-    "NVIDIA_API_KEY": "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",
-    "NVIDIA_API_KEY_VISION": "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",
-    "NVIDIA_API_KEY_IMAGE": "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",
     "PYTHONPATH": str(REPO) + os.pathsep + ENV.get("PYTHONPATH", ""),
 })
+# This suite is the live acceptance test; never let a caller accidentally force
+# the real-provider checks into offline mode through an inherited environment.
+ENV.pop("ALBERTO_OFFLINE", None)
 
 
 def run_cli(args, timeout=60):
@@ -46,13 +46,34 @@ def run_cli(args, timeout=60):
         out = result.stdout.strip() or result.stderr.strip()
         try:
             data = json.loads(out)
-            return data.get("ok", True) if isinstance(data, dict) else True, data
+            success = result.returncode == 0
+            if isinstance(data, dict):
+                success = success and data.get("ok", True) is not False
+            return success, data
         except json.JSONDecodeError:
             return result.returncode == 0, out
     except subprocess.TimeoutExpired:
         return False, "(timeout)"
     except Exception as e:
         return False, f"(error: {e})"
+
+
+def response_text(output):
+    """Extract actual generated text; metadata or an error object is not a response."""
+    if isinstance(output, dict):
+        if output.get("error"):
+            return ""
+        for key in ("response", "answer", "final", "content", "message"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+    if isinstance(output, str):
+        value = output.strip()
+        if not value or value.startswith("(timeout)") or value.startswith("(error:"):
+            return ""
+        return value
+    return ""
 
 
 def step(n, total, title, ok, output):
@@ -84,10 +105,8 @@ def main():
 
     # ===== 1. Basic chat in pt-BR =====
     ok, out = run_cli(["chat", "Diga olá em pt-BR. Responda em 1 frase."], timeout=60)
-    if isinstance(out, dict):
-        is_ok = "ol" in out.get("response", "").lower() or "alberto" in str(out).lower()
-    else:
-        is_ok = "ol" in str(out).lower() or "alberto" in str(out).lower()
+    text = response_text(out)
+    is_ok = ok and bool(text) and ("olá" in text.lower() or "ola" in text.lower())
     results.append(step(1, total, "Chat pt-BR (real LLM)", is_ok, out))
 
     time.sleep(3)
@@ -96,7 +115,6 @@ def main():
     print(f"\n⏳ [2/12] CrewAI squad (engineering)...")
     try:
         sys.path.insert(0, str(REPO))
-        os.environ["NVIDIA_API_KEY"] = os.environ.get("NVIDIA_API_KEY") or "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"
         from alberto.runtime.crewai_runtime import run_crew_squad
         r = run_crew_squad(
             squad_name="engineering",
@@ -123,7 +141,7 @@ def main():
         ["vision", "O que tem nesta imagem?", data_url],
         timeout=45
     )
-    is_ok = ok and ("ok" in str(out).lower() or "response" in str(out).lower() or len(str(out)) > 50)
+    is_ok = ok and bool(response_text(out))
     results.append(step(3, total, "Vision model (multimodal LLM)", is_ok, out))
 
     time.sleep(3)
@@ -186,7 +204,6 @@ def main():
     print(f"\n⏳ [8/12] Image generation (NVIDIA diffusiongemma)...")
     try:
         sys.path.insert(0, str(REPO))
-        os.environ["NVIDIA_API_KEY"] = os.environ.get("NVIDIA_API_KEY") or "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"
         from alberto.runtime.image_gen_runtime import generate_image
         r = generate_image("a red apple on white background", style="photorealistic", size="512x512")
         is_ok = r.get("ok") is True
@@ -223,10 +240,8 @@ def main():
 
     # ===== 11. Ask via orchestrator =====
     ok, out = run_cli(["ask", "resuma o que você é em 1 frase"], timeout=60)
-    if isinstance(out, str):
-        is_ok = "alberto" in out.lower() or "ai" in out.lower()
-    else:
-        is_ok = ok
+    text = response_text(out)
+    is_ok = ok and bool(text) and ("alberto" in text.lower() or "ia" in text.lower() or "assistente" in text.lower())
     results.append(step(11, total, "Ask via orchestrator", is_ok, out))
 
     time.sleep(2)
@@ -250,7 +265,8 @@ def main():
     else:
         print("  ❌ MAJOR ISSUES")
     print("=" * 70)
-    return 0 if passed >= 9 else 1
+    # Acceptance is intentionally strict: partial capability success is a failure.
+    return 0 if passed == total else 1
 
 
 if __name__ == "__main__":

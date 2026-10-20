@@ -16,9 +16,11 @@ Usage:
 """
 from __future__ import annotations
 import json
+import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -194,9 +196,33 @@ class SmartRouter:
              temperature: float, stream: bool) -> Dict[str, Any]:
         """Call a model via OpenAI-compat HTTP API."""
         import os
+        if (
+            not isinstance(spec.credential_env, str)
+            or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", spec.credential_env)
+            or not spec.credential_env.endswith(("_API_KEY", "_API_TOKEN", "_TOKEN"))
+        ):
+            raise ValueError("credential_env must name a dedicated API key/token variable")
         api_key = os.environ.get(spec.credential_env, "")
         if not api_key:
             raise RuntimeError(f"missing credential {spec.credential_env}")
+        parsed = urlsplit(spec.base_url)
+        try:
+            parsed.port  # force validation of malformed ports
+        except ValueError as exc:
+            raise ValueError("provider base_url has an invalid port") from exc
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("provider base_url must be a valid URL without userinfo, query, or fragment")
+        production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if parsed.scheme != "https":
+            if production or parsed.scheme != "http" or parsed.hostname not in loopback_hosts:
+                raise ValueError("provider base_url must use HTTPS (HTTP is allowed only for loopback development)")
         # Strip /v1 if already in base_url (some providers include it)
         base = spec.base_url.rstrip('/')
         if base.endswith('/v1'):
@@ -235,6 +261,7 @@ class SmartRouter:
         s.total_cost_usd += cost_in + cost_out
         s.avg_latency_ms = ((s.avg_latency_ms * (s.calls - 1)) + elapsed_ms) / s.calls
         s.last_used = time.time()
+        s.last_error = ""
         self._save_stats()
 
     def _record_failure(self, spec: ModelSpec, error: str, elapsed_ms: float):

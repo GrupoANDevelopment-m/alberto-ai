@@ -195,7 +195,8 @@ class ModelRouter:
         cred = self._get_credential(spec) or ""
         return {
             "OPENAI_BASE_URL": spec.base_url,
-            "OPENAI_API_KEY": cred,
+            # Never expose the actual credential through CLI/API diagnostics.
+            "OPENAI_API_KEY": "***" if cred else "",
             "LLM_MODEL": spec.model_id,
             "ALBERTO_PROVIDER": spec.provider,
             "ALBERTO_OPTIONS_JSON": json.dumps(spec.options),

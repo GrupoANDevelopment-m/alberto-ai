@@ -5,6 +5,7 @@ Bundles real upstream engines (MiMo, Hermes) with Alberto's chat layer.
 """
 from __future__ import annotations
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,29 @@ from .upstream_bridge import (
 )
 
 
+def resolve_sandbox_kind(env=None) -> str:
+    """Resolve sandbox mode and honor ALBERTO_REQUIRE_DOCKER without silent downgrade.
+
+    LocalSandbox is a host-process development mode, not an OS security boundary.
+    When Docker isolation is required, the configuration must select NemoClaw;
+    a conflicting explicit setting fails closed.
+    """
+    env = os.environ if env is None else env
+    require_docker = str(env.get("ALBERTO_REQUIRE_DOCKER", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    configured = str(env.get("ALBERTO_SANDBOX_KIND", "")).strip().lower()
+    if require_docker:
+        if configured and configured != "nemoclaw":
+            raise RuntimeError(
+                "ALBERTO_REQUIRE_DOCKER is enabled but ALBERTO_SANDBOX_KIND "
+                f"is '{configured}'; use ALBERTO_SANDBOX_KIND=nemoclaw. "
+                "Refusing to run without the required isolation."
+            )
+        return "nemoclaw"
+    return configured or "local"
+
+
 class Alberto:
     """Top-level agent. Wires real MiMo + real Hermes + Alberto orchestration."""
 
@@ -51,7 +75,11 @@ class Alberto:
                  config: Optional[ModelConfig] = None,
                  catalog_dir: Optional[Path] = None,
                  personas_dir: Optional[Path] = None):
-        self.sandbox = sandbox or LocalSandbox()
+        if sandbox is not None:
+            self.sandbox = sandbox
+        else:
+            sandbox_kind = resolve_sandbox_kind()
+            self.sandbox = make_sandbox(sandbox_kind)
         self.router = ModelRouter(self._load_or_init_config())
         self.mimo = MiMoEngine(self.sandbox, self.router)
         self.hermes = HermesEngine(self.sandbox, mimo=self.mimo)
@@ -124,7 +152,8 @@ class Alberto:
         }
 
     # ===== Chat (natural conversation) =====
-    def chat(self, prompt: str, *, conversation_id: Optional[str] = None) -> Dict:
+    def chat(self, prompt: str, *, conversation_id: Optional[str] = None,
+             new_conversation: bool = False) -> Dict:
         """Natural conversation. Returns dict with response + strategy + tool calls.
 
         Args:
@@ -136,10 +165,11 @@ class Alberto:
         """
         # Get or create conversation
         conv = None
-        if conversation_id:
+        if conversation_id and not new_conversation:
             conv = self.conversations.get(conversation_id)
-        if conv is None:
-            # Continue most recent active conversation if <10 min old
+        if conv is None and not new_conversation:
+            # Continue most recent active conversation if <10 min old unless
+            # the caller explicitly starts a fresh conversation.
             conv = self.conversations.latest_active(max_age_seconds=600)
         if conv is None:
             conv = self.conversations.create()
@@ -286,14 +316,15 @@ class Alberto:
                 ] + messages[-1:]
                 messages = messages_with_ctx
 
-            # Add smart router decision
-            messages = messages + [{"role": "system", "content": route_ctx}]
+            # Keep the current user turn last; route/system context after it can
+            # confuse message ordering and weaken the actual request.
+            messages = messages[:-1] + [{"role": "system", "content": route_ctx}, messages[-1]]
 
             # Detect if we're on fallback model (gemma4) — needs Mavis takeover
             on_fallback = is_fallback_model(self)
             if on_fallback:
                 mavis_ctx = get_mavis_takeover_prompt()
-                messages = messages + [{"role": "system", "content": mavis_ctx}]
+                messages = messages[:-1] + [{"role": "system", "content": mavis_ctx}, messages[-1]]
 
             if strat.mode == "squad" and strat.squad:
                 # Squad mode: run the pipeline, but also include the LLM-generated summary as natural response
@@ -312,7 +343,10 @@ class Alberto:
                     fc_result = run_tool_loop(self, messages, task="code",
                                               max_iterations=8, max_tokens=2048,
                                               temperature=0.7)
-                    response_text = fc_result["final_content"] or "[no content]"
+                    if fc_result.get("error"):
+                        response_text = f"[tool loop failed: {fc_result['error']}]"
+                    else:
+                        response_text = fc_result.get("final_content") or "[no content]"
                     # Surface tool calls to the rest of the pipeline
                     for tc in fc_result.get("tool_calls", []):
                         tool_calls.append({
@@ -351,32 +385,53 @@ class Alberto:
             )
             if m:
                 cmd_str = (m.group(1) or m.group(2) or "").strip()
-                cmd = "alberto " + cmd_str
-                # Ensure subprocess has alberto on PATH
+                from .security_whitelist import validate_alberto_subcommand
+                import shlex as _shlex
                 import os as _os_agent
-                env = _os_agent.environ.copy()
-                base_dir = str(Path(__file__).parent.parent)
-                existing_pp = env.get("PYTHONPATH", "")
-                if base_dir not in existing_pp:
-                    env["PYTHONPATH"] = f"{base_dir}:{existing_pp}" if existing_pp else base_dir
-                # If alberto CLI binary missing, fallback to python3 -m alberto.cli
                 import shutil as _shutil
-                if not _shutil.which("alberto"):
-                    # Use the full path
-                    cmd = f"{sys.executable} -m alberto.cli " + cmd_str
-                try:
-                    r = subprocess.run(cmd, shell=True, capture_output=True,
-                                      text=True, timeout=30, env=env)
-                    out = (r.stdout or "") + (r.stderr or "")
-                    exec_result = {"cmd": cmd, "rc": r.returncode, "output": out[:1500]}
+
+                is_safe, reason = validate_alberto_subcommand(cmd_str)
+                if not is_safe:
+                    exec_result = {
+                        "cmd": cmd_str,
+                        "rc": 126,
+                        "output": f"Execução automática bloqueada pela política de segurança: {reason}",
+                    }
                     tool_calls.append({"tool": "alberto_cli", "result": exec_result})
-                    response_text = (response_text + "\n\n"
-                                    f"**Execução automática** (`{cmd}`):\n"
-                                    f"```\n{out[:1500]}\n```")
-                except subprocess.TimeoutExpired:
-                    response_text += f"\n\n**Execução automática** timeout após 30s"
-                except Exception as e:
-                    response_text += f"\n\n**Execução automática** falhou: {e}"
+                    response_text += f"\n\n**Execução automática bloqueada:** {reason}"
+                else:
+                    try:
+                        cli_args = _shlex.split(cmd_str, posix=True)
+                        if not cli_args:
+                            raise ValueError("comando vazio")
+                        env = _os_agent.environ.copy()
+                        base_dir = str(Path(__file__).parent.parent)
+                        existing_pp = env.get("PYTHONPATH", "")
+                        if base_dir not in existing_pp.split(os.pathsep):
+                            env["PYTHONPATH"] = f"{base_dir}{os.pathsep}{existing_pp}" if existing_pp else base_dir
+
+                        cli_path = _shutil.which("alberto")
+                        argv = [cli_path, *cli_args] if cli_path else [sys.executable, "-m", "alberto.cli", *cli_args]
+                        r = subprocess.run(
+                            argv,
+                            shell=False,
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            env=env,
+                        )
+                        out = (r.stdout or "") + (r.stderr or "")
+                        exec_result = {"cmd": argv, "rc": r.returncode, "output": out[:1500]}
+                        tool_calls.append({"tool": "alberto_cli", "result": exec_result})
+                        response_text = (
+                            response_text + "\n\n"
+                            f"Execução automática ({_shlex.join(cli_args)}):\n"
+                            f"{out[:1500]}"
+                        )
+                    except subprocess.TimeoutExpired:
+                        response_text += "\n\nExecução automática timeout após 30s"
+                    except Exception as e:
+                        response_text += f"\n\nExecução automática falhou: {e}"
 
         conv.add("assistant", response_text)
         self.conversations.save(conv)

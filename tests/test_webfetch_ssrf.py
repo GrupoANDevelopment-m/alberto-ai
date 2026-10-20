@@ -1,0 +1,199 @@
+"""Regression tests for SSRF-resistant webfetch behavior."""
+import socket
+import urllib.request
+from types import SimpleNamespace
+
+import pytest
+
+from alberto.runtime import function_caller
+
+
+def test_url_validator_rejects_local_and_non_http_targets():
+    for url in (
+        "http://127.0.0.1/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/",
+        "file:///etc/passwd",
+        "http://localhost/",
+        "http://user:password@example.com/",
+        "https://example.com:8443/",
+    ):
+        with pytest.raises(ValueError):
+            function_caller._validate_public_web_url(url)
+
+
+def test_url_validator_rejects_hostname_resolving_to_private_ip(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.1.2.3", 80))
+        ],
+    )
+
+    with pytest.raises(ValueError, match="non-public"):
+        function_caller._validate_public_web_url("http://internal-looking.example/")
+
+
+def test_url_validator_accepts_public_hostname(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))
+        ],
+    )
+
+    parsed = function_caller._validate_public_web_url("http://example.com/path")
+
+    assert parsed.hostname == "example.com"
+    assert parsed.path == "/path"
+
+
+def test_redirect_handler_rejects_redirect_to_loopback():
+    handler = function_caller._SafeWebRedirectHandler()
+    request = urllib.request.Request("https://example.com/start")
+
+    with pytest.raises(ValueError, match="non-public"):
+        handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "http://127.0.0.1/admin",
+        )
+
+
+def test_webfetch_rejects_private_url_before_opening(monkeypatch):
+    monkeypatch.setattr(
+        function_caller.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network opener must not be built")),
+    )
+
+    output, is_error = function_caller.tool_webfetch(
+        None, {"url": "http://169.254.169.254/latest/meta-data/"}
+    )
+
+    assert is_error is True
+    assert "non-public" in output
+
+
+def test_webfetch_bounds_response_read_and_output(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            self.requested_size = size
+            return b"x" * size
+
+    class FakeOpener:
+        def __init__(self):
+            self.response = FakeResponse()
+
+        def open(self, request, timeout):
+            return self.response
+
+    opener = FakeOpener()
+    monkeypatch.setattr(function_caller, "_validate_public_web_url", lambda url: None)
+    monkeypatch.setattr(function_caller.urllib.request, "build_opener", lambda *handlers: opener)
+
+    output, is_error = function_caller.tool_webfetch(
+        None, {"url": "https://example.com/", "max_length": 10}
+    )
+
+    assert is_error is False
+    assert output == "x" * 10
+    assert opener.response.requested_size == 41
+
+
+
+def test_pinned_http_connection_uses_validated_numeric_address(monkeypatch):
+    calls = []
+    fake_socket = object()
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))
+        ],
+    )
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        calls.append(address)
+        return fake_socket
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    connection = function_caller._PinnedHTTPConnection("rebind.example", timeout=1)
+    connection.connect()
+
+    assert calls == [("93.184.216.34", 80)]
+    assert connection.sock is fake_socket
+
+
+def test_pinned_http_connection_rejects_private_dns_result_before_connect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))
+        ],
+    )
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *args, **kwargs: calls.append(args) or object(),
+    )
+    connection = function_caller._PinnedHTTPConnection("rebind.example", timeout=1)
+
+    with pytest.raises(ValueError, match="non-public"):
+        connection.connect()
+
+    assert calls == []
+
+def test_pinned_https_connection_pins_ip_but_keeps_tls_hostname(monkeypatch):
+    calls = []
+    raw_socket = object()
+    tls_socket = object()
+
+    class FakeTLSContext:
+        # http.client.HTTPSConnection inspects these before connect().
+        verify_mode = 2  # ssl.CERT_REQUIRED
+        check_hostname = True
+
+        def wrap_socket(self, sock, server_hostname):
+            assert sock is raw_socket
+            calls.append(("tls_hostname", server_hostname))
+            return tls_socket
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        calls.append(("connect", address))
+        return raw_socket
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    connection = function_caller._PinnedHTTPSConnection(
+        "secure.example", timeout=1, context=FakeTLSContext()
+    )
+    connection.connect()
+
+    assert calls == [
+        ("connect", ("93.184.216.34", 443)),
+        ("tls_hostname", "secure.example"),
+    ]
+    assert connection.sock is tls_socket
+

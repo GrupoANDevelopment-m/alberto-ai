@@ -14,15 +14,28 @@ Manifests are stored at:
 """
 from __future__ import annotations
 import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
 EXT_TYPES = ("skill", "plugin", "mcp", "provider", "persona", "squad")
+
+
+def _validate_path_component(value: str, label: str) -> str:
+    """Reject path traversal and separators for extension/category identifiers."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty path component")
+    if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(f"invalid {label}: expected a single path component")
+    if Path(value).name != value:
+        raise ValueError(f"invalid {label}: expected a single path component")
+    return value
 
 
 @dataclass
@@ -52,8 +65,20 @@ class ExtensionInstaller:
         if self.config.exists():
             try:
                 data = json.loads(self.config.read_text())
+                if not isinstance(data, dict):
+                    return
                 for name, d in data.items():
-                    self.extensions[name] = Extension(**d)
+                    try:
+                        ext = Extension(**d)
+                        _validate_path_component(name, "extension name")
+                        _validate_path_component(ext.name, "extension name")
+                        if name != ext.name or ext.ext_type not in EXT_TYPES:
+                            continue
+                        self._target_for(ext.ext_type, ext.name)
+                        self.extensions[name] = ext
+                    except (TypeError, ValueError):
+                        # Ignore malformed or path-escaping registry entries.
+                        continue
             except Exception:
                 pass
         else:
@@ -62,6 +87,17 @@ class ExtensionInstaller:
     def _save(self) -> None:
         data = {name: ext.__dict__ for name, ext in self.extensions.items()}
         self.config.write_text(json.dumps(data, indent=2, default=str))
+
+    def _target_for(self, ext_type: str, name: str) -> Path:
+        """Resolve an extension target and guarantee it remains under the install root."""
+        if ext_type not in EXT_TYPES:
+            raise ValueError(f"unsupported extension type: {ext_type}")
+        name = _validate_path_component(name, "extension name")
+        root = self.home.resolve()
+        target = (root / f"{ext_type}s" / name).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError("extension target escapes the install directory")
+        return target
 
     def list(self, ext_type: Optional[str] = None) -> List[Extension]:
         exts = list(self.extensions.values())
@@ -78,12 +114,14 @@ class ExtensionInstaller:
         - a git url
         - a registry name (skill:<name> for built-in skills)
         """
-        import time
+        name = _validate_path_component(name, "extension name")
+        if ext_type not in EXT_TYPES:
+            raise ValueError(f"unsupported extension type: {ext_type}")
         ext = Extension(
             name=name, ext_type=ext_type, version=version,
             source=source, description=description, installed_at=time.time(),
         )
-        target = self.home / f"{ext_type}s" / name
+        target = self._target_for(ext_type, name)
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if source.startswith("/") or source.startswith("."):
@@ -95,17 +133,25 @@ class ExtensionInstaller:
                 shutil.copytree(src, target)
             else:
                 shutil.copy(src, target)
-        elif source.startswith(("http://", "https://", "git@")):
-            # Git clone
+        elif source.startswith(("https://", "git@")):
+            # Avoid plaintext Git transport and disable interactive credential prompts.
             if target.exists():
                 shutil.rmtree(target)
-            subprocess.run(["git", "clone", "--depth=1", source, str(target)],
-                           check=True, capture_output=True)
+            git_env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+            subprocess.run(
+                ["git", "clone", "--depth=1", source, str(target)],
+                check=True, capture_output=True, timeout=120, env=git_env,
+            )
+        elif source.startswith("http://"):
+            raise ValueError("insecure http:// extension sources are not allowed; use HTTPS")
         elif source.startswith("skill:"):
-            # Built-in skill
+            # Built-in skill names must remain confined to the repository skills root.
             skill_name = source[len("skill:"):]
-            src = self.local_skills / skill_name
-            if not src.exists():
+            skill_root = self.local_skills.resolve()
+            src = (skill_root / skill_name).resolve()
+            if not src.is_relative_to(skill_root):
+                raise ValueError("built-in skill source escapes the skills directory")
+            if not src.exists() or not src.is_dir():
                 raise FileNotFoundError(f"built-in skill {skill_name} not found")
             if target.exists():
                 shutil.rmtree(target)
@@ -125,7 +171,10 @@ class ExtensionInstaller:
         ext = self.extensions.get(name)
         if not ext:
             return False
-        target = self.home / f"{ext.ext_type}s" / name
+        try:
+            target = self._target_for(ext.ext_type, ext.name)
+        except ValueError:
+            return False
         if target.exists():
             shutil.rmtree(target)
         del self.extensions[name]
@@ -152,7 +201,12 @@ class ExtensionInstaller:
     def create_skill(self, name: str, *, description: str, content: str,
                      category: str = "user") -> Path:
         """Create a new skill from scratch and install it locally."""
-        target = self.local_skills / category / name
+        category = _validate_path_component(category, "skill category")
+        name = _validate_path_component(name, "skill name")
+        target = (self.local_skills / category / name).resolve()
+        skills_root = self.local_skills.resolve()
+        if not target.is_relative_to(skills_root):
+            raise ValueError("skill path escapes the local skills directory")
         target.mkdir(parents=True, exist_ok=True)
         skill_md = target / "SKILL.md"
         skill_md.write_text(f"""---

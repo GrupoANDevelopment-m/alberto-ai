@@ -43,7 +43,7 @@ def alberto():
 # ===== Identity =====
 def test_identity():
     assert NAME == "Alberto AI"
-    assert VERSION == "1.0.0"
+    assert VERSION == "1.8.4"
     assert "Alberto" in get_banner()
 
 
@@ -310,12 +310,23 @@ def test_tool_invoke_judge_without_model(alberto):
     assert "verdict" in out
 
 
+def test_tool_file_rejects_absolute_host_path(alberto):
+    """Absolute paths outside sandbox home must not bypass confinement."""
+    out = invoke_tool(alberto, "file", {
+        "action": "write", "path": "/tmp/alberto-outside-test.txt", "content": "blocked"
+    })
+    assert out["ok"] is False
+    assert "escapes sandbox home" in out["error"]
+
+
 def test_tool_invoke_file_upload(alberto):
     """File write to sandbox."""
-    out = invoke_tool(alberto, "file", {"action": "write", "path": "/tmp/test.txt", "content": "hello world"})
+    # File operations are confined to the configured sandbox home; use a
+    # relative path rather than an absolute host path such as /tmp/test.txt.
+    out = invoke_tool(alberto, "file", {"action": "write", "path": "test-upload.txt", "content": "hello world"})
     assert out["ok"] is True
     # Verify the file was actually written
-    r = invoke_tool(alberto, "file", {"action": "read", "path": "/tmp/test.txt"})
+    r = invoke_tool(alberto, "file", {"action": "read", "path": "test-upload.txt"})
     assert r["ok"] is True
     assert "hello world" in r["content"]
 

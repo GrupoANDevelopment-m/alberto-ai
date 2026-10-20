@@ -23,10 +23,12 @@ APP_VERSION = "1.8.0"
 import asyncio
 import json
 import os
+import hmac
+import logging
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -39,10 +41,15 @@ from alberto.tools_registry import list_tools, invoke_tool
 
 
 # ===== Pydantic models =====
+class SessionLoginRequest(BaseModel):
+    token: str
+
+
 class ChatRequest(BaseModel):
     prompt: str
     squad: Optional[str] = None
     conversation_id: Optional[str] = None
+    new_conversation: bool = False
 
 class MemorySetRequest(BaseModel):
     key: str
@@ -97,8 +104,44 @@ def create_app(alberto: Optional[Alberto] = None,
         frontend_dir = Path(__file__).parent.parent.parent / "frontend"
     frontend_dir = Path(frontend_dir)  # ensure Path
 
-    app = FastAPI(title=NAME, version=VERSION, docs_url="/__docs")
+    production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+    api_token = os.environ.get("ALBERTO_API_TOKEN", "")
+    if production and len(api_token) < 32:
+        raise RuntimeError(
+            "production mode requires ALBERTO_API_TOKEN with at least 32 characters"
+        )
+
+    app = FastAPI(
+        title=NAME,
+        version=VERSION,
+        docs_url=None if production else "/__docs",
+        redoc_url=None if production else "/__redoc",
+        openapi_url=None if production else "/openapi.json",
+    )
     app.state.alberto = alberto
+
+    @app.middleware("http")
+    async def require_api_auth(request: Request, call_next):
+        token = os.environ.get("ALBERTO_API_TOKEN", "")
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        is_session_login = request.url.path == "/api/session/login" and request.method == "POST"
+        protected_path = (request.url.path.startswith("/api/") and not is_session_login) or (
+            not is_production
+            and request.url.path in {"/__docs", "/__redoc", "/openapi.json"}
+        )
+        if protected_path and (token or is_production):
+            authorization = request.headers.get("authorization", "")
+            scheme, separator, supplied = authorization.partition(" ")
+            bearer_ok = bool(separator and scheme.lower() == "bearer" and hmac.compare_digest(supplied, token))
+            cookie_token = request.cookies.get("alberto_session", "")
+            cookie_ok = bool(cookie_token and hmac.compare_digest(cookie_token, token))
+            if not (bearer_ok or cookie_ok):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "authentication required"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        return await call_next(request)
 
     # ===== Frontend =====
     @app.get("/", response_class=FileResponse)
@@ -110,6 +153,31 @@ def create_app(alberto: Optional[Alberto] = None,
         d = frontend_dir / sub
         if d.exists():
             app.mount(f"/{sub}", StaticFiles(directory=str(d)), name=sub)
+
+    # Exchange the long-lived token for an HttpOnly same-site browser session.
+    @app.post("/api/session/login")
+    async def session_login(req: SessionLoginRequest):
+        configured_token = os.environ.get("ALBERTO_API_TOKEN", "")
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        if not configured_token or not hmac.compare_digest(req.token, configured_token):
+            raise HTTPException(status_code=401, detail="invalid access token")
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            key="alberto_session",
+            value=configured_token,
+            httponly=True,
+            secure=is_production,
+            samesite="strict",
+            path="/api",
+            max_age=8 * 60 * 60,
+        )
+        return response
+
+    @app.post("/api/session/logout")
+    async def session_logout():
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(key="alberto_session", path="/api", httponly=True, samesite="strict")
+        return response
 
     # ===== Identity =====
     @app.get("/api/banner")
@@ -146,7 +214,11 @@ def create_app(alberto: Optional[Alberto] = None,
 
         async def gen():
             try:
-                result = a.chat(req.prompt, conversation_id=req.conversation_id)
+                result = a.chat(
+                    req.prompt,
+                    conversation_id=req.conversation_id,
+                    new_conversation=req.new_conversation,
+                )
                 text = result.get("response", "")
                 for chunk in chunk_text(text, size=20):
                     yield "data: " + json.dumps({"type": "text", "content": chunk}) + "\n\n"
@@ -175,7 +247,7 @@ def create_app(alberto: Optional[Alberto] = None,
         return {"key": key, "value": v}
 
     @app.get("/api/memory/search")
-    async def memory_search(q: str, limit: int = 10):
+    async def memory_search(q: str, limit: int = Query(default=10, ge=1, le=100)):
         return app.state.alberto.memory_search(q, limit=limit)
 
     @app.post("/api/memory/set")
@@ -185,12 +257,15 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.delete("/api/memory/delete")
     async def memory_delete(key: str):
-        a = app.state.alberto
+        # Use the engine's public API rather than a nonexistent private SQL
+        # helper. This keeps deletion inside MiMo's transaction/FTS5 triggers.
         try:
-            a._sandbox_run_unsafe(f"DELETE FROM memory WHERE key=?", (key,))
-            return {"ok": True}
-        except Exception as e:
-            raise HTTPException(500, str(e))
+            ok = app.state.alberto.memory_delete(key)
+        except Exception:
+            raise HTTPException(500, "memory deletion failed")
+        if not ok:
+            raise HTTPException(500, "memory deletion failed")
+        return {"ok": True, "key": key}
 
     # ===== Squads =====
     @app.get("/api/squad/list")
@@ -279,7 +354,11 @@ def create_app(alberto: Optional[Alberto] = None,
         env = app.state.alberto.model_test(task)
         if not env:
             raise HTTPException(404, f"no model configured for task {task!r}")
-        return env
+        # Defense in depth: diagnostics may report credential presence, never its value.
+        safe_env = dict(env)
+        if "OPENAI_API_KEY" in safe_env:
+            safe_env["OPENAI_API_KEY"] = "***" if safe_env["OPENAI_API_KEY"] else ""
+        return safe_env
 
     # ===== Hermes =====
     @app.post("/api/hermes/browser")
@@ -296,6 +375,20 @@ def create_app(alberto: Optional[Alberto] = None,
 
     @app.exception_handler(Exception)
     async def all_exception_handler(request: Request, exc: Exception):
+        is_production = os.environ.get("ALBERTO_ENV", "").strip().lower() in {"prod", "production"}
+        logger = logging.getLogger("alberto.server")
+        if is_production:
+            logger.error(
+                "Unhandled request exception for %s %s (type=%s)",
+                request.method, request.url.path, type(exc).__name__,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={"error": "internal server error"},
+            )
+        logger.exception(
+            "Unhandled request exception for %s %s", request.method, request.url.path
+        )
         return JSONResponse(
             status_code=500,
             content={"error": str(exc), "type": type(exc).__name__},
