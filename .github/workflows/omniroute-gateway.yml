@@ -50,7 +50,7 @@ jobs:
 
           ready=0
           for attempt in $(seq 1 90); do
-            if curl --silent --show-error --fail http://127.0.0.1:20128/healthz > "$RUNNER_TEMP/omniroute-health.json"; then
+            if curl --silent --show-error --fail http://127.0.0.1:20128/healthz > "$RUNNER_TEMP/omniroute-health.txt"; then
               ready=1
               break
             fi
@@ -68,16 +68,24 @@ jobs:
             exit 1
           fi
 
-          cat "$RUNNER_TEMP/omniroute-health.json"
-          python - "$RUNNER_TEMP/omniroute-health.json" <<'PY'
+          cat "$RUNNER_TEMP/omniroute-health.txt"
+          python - "$RUNNER_TEMP/omniroute-health.txt" <<'PY'
           import json
           import sys
           from pathlib import Path
 
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if payload.get("status") != "ok":
+          raw = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError:
+              payload = raw
+
+          healthy = payload == "ok" or (
+              isinstance(payload, dict) and payload.get("status") == "ok"
+          )
+          if not healthy:
               raise SystemExit(f"Unexpected OmniRoute health response: {payload!r}")
-          print("OmniRoute health endpoint reports status=ok")
+          print("OmniRoute health endpoint reports healthy status")
           PY
 
       - name: Upload gateway logs on failure
