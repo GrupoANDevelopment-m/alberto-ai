@@ -88,6 +88,44 @@ jobs:
           print("OmniRoute health endpoint reports healthy status")
           PY
 
+      - name: Inspect configured providers, model catalog, and API surface
+        shell: bash
+        run: |
+          set -uo pipefail
+          export OMNIROUTE_BASE_URL="http://127.0.0.1:20128"
+          echo "=== CLI command capabilities ==="
+          omniroute providers --help || true
+          omniroute models --help || true
+          omniroute status --help || true
+          echo "=== Configured providers (JSON) ==="
+          omniroute providers --output json > "$RUNNER_TEMP/omniroute-providers.json" 2>&1
+          providers_rc=$?
+          cat "$RUNNER_TEMP/omniroute-providers.json"
+          echo "providers_exit_code=$providers_rc"
+          echo "=== Available models (JSON) ==="
+          omniroute models --output json > "$RUNNER_TEMP/omniroute-models.json" 2>&1
+          models_rc=$?
+          cat "$RUNNER_TEMP/omniroute-models.json"
+          echo "models_exit_code=$models_rc"
+          echo "=== Gateway status (JSON) ==="
+          omniroute status --output json > "$RUNNER_TEMP/omniroute-status.json" 2>&1
+          status_rc=$?
+          cat "$RUNNER_TEMP/omniroute-status.json"
+          echo "status_exit_code=$status_rc"
+          echo "=== Doctor diagnostics (JSON) ==="
+          omniroute doctor --json > "$RUNNER_TEMP/omniroute-doctor.json" 2>&1
+          doctor_rc=$?
+          cat "$RUNNER_TEMP/omniroute-doctor.json"
+          echo "doctor_exit_code=$doctor_rc"
+          echo "=== OpenAI-compatible models endpoint (without credentials) ==="
+          curl --silent --show-error --max-time 15 -i \
+            http://127.0.0.1:20128/v1/models || true
+          echo
+          echo "=== Provider/model inventory inspection complete ==="
+          # Keep the workflow green for a healthy gateway even when this clean
+          # ephemeral runner has no provider credentials/configuration. The
+          # captured output distinguishes configured models from an empty catalog.
+
       - name: Upload gateway logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
