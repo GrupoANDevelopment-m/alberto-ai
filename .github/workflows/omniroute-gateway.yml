@@ -26,25 +26,23 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install OmniRoute CLI
+      - name: Install OmniRoute, start gateway, and verify health
+        shell: bash
         run: |
+          set -euo pipefail
           node --version
           npm --version
           npm install --global omniroute
           omniroute --version
-          omniroute --help
 
-      - name: Start local gateway and wait for readiness
-        shell: bash
-        run: |
-          set -euo pipefail
+          # Keep the server and its health check in the same step. GitHub Actions
+          # steps run in separate shells, so a process started in one step does
+          # not remain available to the next step.
           omniroute serve --no-open --port 20128 --no-recovery > "$RUNNER_TEMP/omniroute.log" 2>&1 &
           gateway_pid=$!
           cleanup() {
             kill "$gateway_pid" 2>/dev/null || true
-            if command -v omniroute >/dev/null 2>&1; then
-              omniroute stop >/dev/null 2>&1 || true
-            fi
+            omniroute stop >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
@@ -85,45 +83,8 @@ jobs:
           )
           if not healthy:
               raise SystemExit(f"Unexpected OmniRoute health response: {payload!r}")
-          print("OmniRoute health endpoint reports healthy status")
+          print("PASS: OmniRoute installed, process started, and /healthz is healthy.")
           PY
-
-      - name: Inspect configured providers, model catalog, and API surface
-        shell: bash
-        run: |
-          set -uo pipefail
-          export OMNIROUTE_BASE_URL="http://127.0.0.1:20128"
-
-          run_check() {
-            label="$1"
-            shift
-            output="$RUNNER_TEMP/omniroute-check-$(echo "$label" | tr ' /' '--').txt"
-            echo "=== $label ==="
-            if "$@" > "$output" 2>&1; then rc=0; else rc=$?; fi
-            cat "$output"
-            echo "exit_code=$rc"
-            return 0
-          }
-
-          run_check "Provider list help" omniroute providers list --help
-          run_check "Available provider catalog" omniroute providers available
-          run_check "Configured provider connections" omniroute providers list
-          run_check "Provider connection validation" omniroute providers validate
-          run_check "Model catalog (JSON)" omniroute models --json
-          run_check "Gateway status" omniroute status --verbose
-          run_check "Gateway diagnostics (JSON)" omniroute doctor --json
-          echo "=== OpenAI-compatible models endpoint (no auth header) ==="
-          if curl --silent --show-error --max-time 15 -i \
-            http://127.0.0.1:20128/v1/models; then
-            echo "models_endpoint_curl_exit_code=0"
-          else
-            echo "models_endpoint_curl_exit_code=$?"
-          fi
-          echo
-          echo "=== Provider/model inventory inspection complete ==="
-          # This ephemeral runner starts with a clean user profile. Provider
-          # credentials stored on the developer's machine are not available here.
-          # Preserve each command's output so empty config/auth issues are visible.
 
       - name: Upload gateway logs on failure
         if: failure()
