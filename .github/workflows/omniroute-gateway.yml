@@ -93,38 +93,37 @@ jobs:
         run: |
           set -uo pipefail
           export OMNIROUTE_BASE_URL="http://127.0.0.1:20128"
-          echo "=== CLI command capabilities ==="
-          omniroute providers --help || true
-          omniroute models --help || true
-          omniroute status --help || true
-          echo "=== Configured providers (JSON) ==="
-          omniroute providers --output json > "$RUNNER_TEMP/omniroute-providers.json" 2>&1
-          providers_rc=$?
-          cat "$RUNNER_TEMP/omniroute-providers.json"
-          echo "providers_exit_code=$providers_rc"
-          echo "=== Available models (JSON) ==="
-          omniroute models --output json > "$RUNNER_TEMP/omniroute-models.json" 2>&1
-          models_rc=$?
-          cat "$RUNNER_TEMP/omniroute-models.json"
-          echo "models_exit_code=$models_rc"
-          echo "=== Gateway status (JSON) ==="
-          omniroute status --output json > "$RUNNER_TEMP/omniroute-status.json" 2>&1
-          status_rc=$?
-          cat "$RUNNER_TEMP/omniroute-status.json"
-          echo "status_exit_code=$status_rc"
-          echo "=== Doctor diagnostics (JSON) ==="
-          omniroute doctor --json > "$RUNNER_TEMP/omniroute-doctor.json" 2>&1
-          doctor_rc=$?
-          cat "$RUNNER_TEMP/omniroute-doctor.json"
-          echo "doctor_exit_code=$doctor_rc"
-          echo "=== OpenAI-compatible models endpoint (without credentials) ==="
-          curl --silent --show-error --max-time 15 -i \
-            http://127.0.0.1:20128/v1/models || true
+
+          run_check() {
+            label="$1"
+            shift
+            output="$RUNNER_TEMP/omniroute-check-$(echo "$label" | tr ' /' '--').txt"
+            echo "=== $label ==="
+            if "$@" > "$output" 2>&1; then rc=0; else rc=$?; fi
+            cat "$output"
+            echo "exit_code=$rc"
+            return 0
+          }
+
+          run_check "Provider list help" omniroute providers list --help
+          run_check "Available provider catalog" omniroute providers available
+          run_check "Configured provider connections" omniroute providers list
+          run_check "Provider connection validation" omniroute providers validate
+          run_check "Model catalog (JSON)" omniroute models --json
+          run_check "Gateway status" omniroute status --verbose
+          run_check "Gateway diagnostics (JSON)" omniroute doctor --json
+          echo "=== OpenAI-compatible models endpoint (no auth header) ==="
+          if curl --silent --show-error --max-time 15 -i \
+            http://127.0.0.1:20128/v1/models; then
+            echo "models_endpoint_curl_exit_code=0"
+          else
+            echo "models_endpoint_curl_exit_code=$?"
+          fi
           echo
           echo "=== Provider/model inventory inspection complete ==="
-          # Keep the workflow green for a healthy gateway even when this clean
-          # ephemeral runner has no provider credentials/configuration. The
-          # captured output distinguishes configured models from an empty catalog.
+          # This ephemeral runner starts with a clean user profile. Provider
+          # credentials stored on the developer's machine are not available here.
+          # Preserve each command's output so empty config/auth issues are visible.
 
       - name: Upload gateway logs on failure
         if: failure()
