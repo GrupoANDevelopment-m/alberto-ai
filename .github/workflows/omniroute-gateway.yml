@@ -1,0 +1,90 @@
+name: OmniRoute Gateway Validation
+
+on:
+  push:
+    branches: [audit/omniroute-gateway-validation]
+  pull_request:
+    branches: [main, master, audit/integrated-hardening]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: omniroute-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install OmniRoute CLI
+        run: |
+          node --version
+          npm --version
+          npm install --global omniroute
+          omniroute --version
+          omniroute --help
+
+      - name: Start local gateway and wait for readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          omniroute serve --no-open --port 20128 --no-recovery > "$RUNNER_TEMP/omniroute.log" 2>&1 &
+          gateway_pid=$!
+          cleanup() {
+            kill "$gateway_pid" 2>/dev/null || true
+            if command -v omniroute >/dev/null 2>&1; then
+              omniroute stop >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --silent --show-error --fail http://127.0.0.1:20128/healthz > "$RUNNER_TEMP/omniroute-health.json"; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              echo "OmniRoute process exited before becoming healthy."
+              cat "$RUNNER_TEMP/omniroute.log"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "OmniRoute did not become healthy within 180 seconds."
+            cat "$RUNNER_TEMP/omniroute.log"
+            exit 1
+          fi
+
+          cat "$RUNNER_TEMP/omniroute-health.json"
+          python - "$RUNNER_TEMP/omniroute-health.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("status") != "ok":
+              raise SystemExit(f"Unexpected OmniRoute health response: {payload!r}")
+          print("OmniRoute health endpoint reports status=ok")
+          PY
+
+      - name: Upload gateway logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-gateway-logs
+          path: ${{ runner.temp }}/omniroute.log
+          if-no-files-found: ignore
