@@ -222,3 +222,38 @@ def test_skill_evolution_rejects_prose_only_changes(tmp_path, monkeypatch):
         learner.evolve_skill("runtime-skill", improvements="This is only prose.")
 
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_alberto_preserves_recent_context_when_delegating_to_native_squad():
+    from alberto.agent import Alberto
+
+    step = SimpleNamespace(persona="analyst", task="Answer the current request", output_to="answer")
+    squad = SimpleNamespace(workflow=[step], personas={})
+    calls = []
+    agent = Alberto.__new__(Alberto)
+    agent.catalog = SimpleNamespace(get=lambda _name: squad)
+    agent.personas = SimpleNamespace(get=lambda _name: None)
+    agent.router = SimpleNamespace(
+        invoke=lambda task, messages, **kwargs: (
+            calls.append((task, messages, kwargs))
+            or {"choices": [{"message": {"content": "context preserved"}}]}
+        )
+    )
+
+    result = agent.run_squad(
+        "engineering",
+        "What did we decide?",
+        context_messages=[
+            {"role": "system", "content": "Respect the established project constraints."},
+            {"role": "user", "content": "Use Alberto as the central coordinator."},
+            {"role": "assistant", "content": "Confirmed; Hermes and MiMo are components."},
+            {"role": "user", "content": "What did we decide?"},
+        ],
+    )
+
+    assert result["outputs"]["answer"] == "context preserved"
+    submitted = calls[0][1][1]["content"]
+    assert "Use Alberto as the central coordinator." in submitted
+    assert "Hermes and MiMo are components." in submitted
+    assert "CURRENT USER REQUEST" in submitted
+    assert "What did we decide?" in submitted
