@@ -89,6 +89,7 @@ class SkillManager:
                 "tags": skill.get("tags", []),
                 "path": skill.get("path", ""),
                 "version": skill.get("version", "0.0.0"),
+                "executable": bool(skill.get("executable", True)),
                 "stats": {
                     "success": int(old_stats.get("success", 0)),
                     "fail": int(old_stats.get("fail", 0)),
@@ -153,7 +154,7 @@ class SkillManager:
         q_words = set(re.findall(r"\w+", query.lower()))
         scored = []
         for s in self.index.values():
-            if not s.get("available", bool(s.get("path"))):
+            if not s.get("available", bool(s.get("path"))) or not s.get("executable", True):
                 continue
             text = (s["name"] + " " + s["description"] + " " +
                     " ".join(s["tags"]) + " " + s["category"]).lower()
