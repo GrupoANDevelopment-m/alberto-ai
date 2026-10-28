@@ -142,7 +142,7 @@ def test_learning_profile_persists_observations_and_returns_adaptation_hints(tmp
         Memory(),
     )
     learner.observe_interaction(
-        "Por favor, explique detalhadamente esta arquitetura",
+        "Não, quero que você explique detalhadamente esta arquitetura",
         "Aqui está uma explicação detalhada.",
     )
 
@@ -150,6 +150,7 @@ def test_learning_profile_persists_observations_and_returns_adaptation_hints(tmp
     reloaded = Learner(SimpleNamespace(home=lambda: tmp_path), Memory())
     assert reloaded.profile["interactions"] == 1
     assert reloaded.get_adaptation_hints()["style"] == "Provide thorough explanations with examples"
+    assert reloaded.get_adaptation_hints()["language"] == "Respond in Portuguese"
     assert (tmp_path / ".mimo" / "user_profile.json").is_file()
 
 
