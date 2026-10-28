@@ -187,9 +187,17 @@ class TestLearner:
     def test_evolve_skill(self, alberto):
         l = Learner(alberto.sandbox, alberto.mimo)
         # Create a test skill first
-        l.create_skill("evolve-test", description="t", content="c")
-        path = l.evolve_skill("evolve-test", improvements="added retries")
-        assert path and "Evolution" in path.read_text()
+        l.create_skill(
+            "evolve-test", description="t",
+            content="Run this command:\n\n```bash\necho initial\n```",
+        )
+        path = l.evolve_skill(
+            "evolve-test", improvements="added retries",
+            new_code_blocks=[{"lang": "bash", "code": "echo retries"}],
+        )
+        evolved = path.read_text()
+        assert path and "Evolution" in evolved
+        assert "```bash\necho retries\n```" in evolved
 
     def test_user_profile_adapt(self, alberto):
         l = Learner(alberto.sandbox, alberto.mimo)
