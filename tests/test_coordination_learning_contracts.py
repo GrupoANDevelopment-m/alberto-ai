@@ -124,9 +124,9 @@ def test_skill_catalog_refresh_discovers_new_skills_and_preserves_stats(tmp_path
     manager._save_stats()
 
     assert "learned-skill" in manager.index
-    assert "documentation-only" not in [
-        item["skill"]["name"] for item in manager.search("documentation-only", limit=10)
-    ]
+    documentation_hits = manager.search("documentation-only", limit=10)
+    assert documentation_hits
+    assert documentation_hits[0]["skill"]["executable"] is False
     assert manager.index["existing-skill"]["stats"]["success"] == 1
     assert manager.index["existing-skill"]["stats"]["total_time"] == pytest.approx(1.25)
 
