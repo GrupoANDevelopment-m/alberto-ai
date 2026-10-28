@@ -86,6 +86,46 @@ jobs:
           print("PASS: OmniRoute installed, process started, and /healthz is healthy.")
           PY
 
+          # Probe the actual OpenAI-compatible API. This deliberately does not
+          # treat /healthz as proof of model availability.
+          echo "Probing /v1/models (unauthenticated) to discover configured routes..."
+          models_status=$(curl --silent --show-error --output "$RUNNER_TEMP/omniroute-models.json" --write-out '%{http_code}' --max-time 30 http://127.0.0.1:20128/v1/models || true)
+          echo "GET /v1/models HTTP status: \${models_status:-curl-error}"
+          cat "$RUNNER_TEMP/omniroute-models.json" 2>/dev/null || true
+          echo
+
+          echo "Attempting a real chat completion through OmniRoute (model=auto)..."
+          chat_status=$(curl --silent --show-error --output "$RUNNER_TEMP/omniroute-chat.json" --write-out '%{http_code}' --max-time 90 \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"auto","messages":[{"role":"user","content":"Reply with exactly: OMNIROUTE_LIVE_MODEL_OK"}],"max_tokens":40}' \
+            http://127.0.0.1:20128/v1/chat/completions || true)
+          echo "POST /v1/chat/completions HTTP status: \${chat_status:-curl-error}"
+          cat "$RUNNER_TEMP/omniroute-chat.json" 2>/dev/null || true
+          echo
+
+          python - "$RUNNER_TEMP/omniroute-chat.json" "$chat_status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path, status = sys.argv[1:]
+          raw = Path(path).read_text(encoding="utf-8").strip() if Path(path).exists() else ""
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError:
+              payload = None
+          choices = payload.get("choices", []) if isinstance(payload, dict) else []
+          message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
+          content = message.get("content") if isinstance(message, dict) else None
+          if status != "200" or not isinstance(content, str) or not content.strip():
+              print("FAIL: gateway health passed, but a real model response was not obtained.")
+              print("Inspect the HTTP status/body above; a provider route or gateway API key may need configuration.")
+              raise SystemExit(1)
+          print("PASS: received a non-empty completion from a model through OmniRoute.")
+          print("Model reported by gateway:", payload.get("model", "not reported"))
+          print("Response content:", content)
+          PY
+
       - name: Upload gateway logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
