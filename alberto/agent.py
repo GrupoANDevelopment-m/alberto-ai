@@ -129,6 +129,7 @@ class Alberto:
         return identity.get_banner()
 
     def status(self) -> Dict:
+        from .runtime.crewai_runtime import get_crewai_status
         return {
             "name": self.name,
             "version": self.version,
@@ -151,9 +152,7 @@ class Alberto:
             "upstream": get_upstream_summary(),
             "coordination": {
                 "squad_engine": os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower(),
-                "crewai": __import__(
-                    "alberto.runtime.crewai_runtime", fromlist=["get_crewai_status"]
-                ).get_crewai_status(),
+                "crewai": get_crewai_status(),
                 "hermes_tool_dispatch": True,
                 "mimo_model_fallback": True,
             },
