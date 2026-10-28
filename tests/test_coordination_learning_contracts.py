@@ -138,3 +138,43 @@ def test_learning_profile_persists_observations_and_returns_adaptation_hints(tmp
     assert reloaded.profile["interactions"] == 1
     assert reloaded.get_adaptation_hints()["style"] == "Provide thorough explanations with examples"
     assert (tmp_path / ".mimo" / "user_profile.json").is_file()
+
+
+
+def test_alberto_can_delegate_squad_execution_to_crewai(monkeypatch):
+    import os
+    from alberto.agent import Alberto
+    from alberto.model_router import ModelSpec
+
+    calls = []
+    spec = ModelSpec(
+        provider="openrouter",
+        model_id="openrouter/test-model",
+        base_url="https://openrouter.ai/api",
+        credential_env="OPENROUTER_API_KEY",
+    )
+    agent = Alberto.__new__(Alberto)
+    agent.catalog = SimpleNamespace(get=lambda _name: object())
+    agent.router = SimpleNamespace(
+        config=SimpleNamespace(resolve=lambda task: spec if task == "chat" else None)
+    )
+    monkeypatch.setenv("ALBERTO_SQUAD_ENGINE", "crewai")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only-placeholder")
+
+    def fake_run_crew_squad(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "outputs": {"final": "crew result"}}
+
+    from alberto.runtime import crewai_runtime
+    monkeypatch.setattr(crewai_runtime, "run_crew_squad", fake_run_crew_squad)
+
+    result = agent.run_squad("engineering", "preserve this exact request")
+
+    assert result["ok"] is True
+    assert result["engine"] == "crewai"
+    assert calls[0]["squad_name"] == "engineering"
+    assert calls[0]["llm_model"] == "openrouter/test-model"
+    assert calls[0]["llm_base_url"] == "https://openrouter.ai/api"
+    assert calls[0]["llm_api_key"] == "test-only-placeholder"
+    assert calls[0]["user_prompt"] == "preserve this exact request"
+    assert Path(calls[0]["workflow_yaml_path"]).name == "engineering.yaml"
