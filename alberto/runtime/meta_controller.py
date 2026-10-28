@@ -154,7 +154,7 @@ class SkillManager:
         q_words = set(re.findall(r"\w+", query.lower()))
         scored = []
         for s in self.index.values():
-            if not s.get("available", bool(s.get("path"))) or not s.get("executable", True):
+            if not s.get("available", bool(s.get("path"))):
                 continue
             text = (s["name"] + " " + s["description"] + " " +
                     " ".join(s["tags"]) + " " + s["category"]).lower()
@@ -309,13 +309,16 @@ class MetaController:
         skill first. The lexical gate prevents that fallback and lets execution
         block safely when no relevant capability is available.
         """
-        relevant = self.skill_manager.search(task, limit=5, min_score=0.1)
+        relevant = [
+            item for item in self.skill_manager.search(task, limit=10, min_score=0.1)
+            if isinstance(item, dict)
+            and isinstance(item.get("skill"), dict)
+            and item["skill"].get("executable", True)
+        ]
         if not relevant:
             return None
         relevant_names = {
-            item.get("skill", {}).get("name")
-            for item in relevant
-            if isinstance(item, dict) and isinstance(item.get("skill"), dict)
+            item["skill"].get("name") for item in relevant
         }
         recs = self.skill_manager.recommend(task, top=5)
         for item in recs:
