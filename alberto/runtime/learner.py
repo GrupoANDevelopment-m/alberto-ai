@@ -214,7 +214,7 @@ class Learner:
         content = content[:executable.start()] + new_primary + content[executable.end():]
 
         # Bump version, including JSON-quoted YAML scalars produced by create_skill.
-        m = re.search(r'(?m)^version:\s*["']?(\d+\.\d+\.\d+)["']?\s*$', content)
+        m = re.search(r"(?m)^version:\s*[\"']?(\d+\.\d+\.\d+)[\"']?\s*$", content)
         if m:
             old = m.group(1)
             parts = list(map(int, old.split(".")))
