@@ -485,9 +485,46 @@ class Alberto:
 
     # ===== Squad execution =====
     def run_squad(self, squad_name: str, prompt: str) -> Dict:
+        """Coordinate a squad through Alberto's native runner or configured CrewAI adapter.
+
+        Alberto remains the entry point and decision-maker. CrewAI is an optional
+        execution backend for a squad, not a coordinator of Alberto, Hermes, or MiMo.
+        """
         squad = self.catalog.get(squad_name)
         if squad is None:
             return {"error": f"unknown squad: {squad_name}"}
+
+        squad_engine = os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower()
+        if squad_engine == "crewai":
+            from alberto.runtime.crewai_runtime import run_crew_squad
+            base = Path(__file__).parent.parent
+            workflow_path = base / "workflows" / f"{squad_name}.yaml"
+            if not workflow_path.is_file():
+                workflow_path = base / "workflows" / f"{squad_name}.yml"
+            if not workflow_path.is_file():
+                return {
+                    "error": f"CrewAI was selected, but no workflow YAML exists for squad '{squad_name}'",
+                    "engine": "crewai",
+                    "ok": False,
+                }
+            try:
+                spec = self.router.config.resolve("chat")
+            except Exception as exc:
+                return {"ok": False, "engine": "crewai", "error": f"model route unavailable: {exc}"}
+            if spec is None:
+                return {"ok": False, "engine": "crewai", "error": "no model configured for task 'chat'"}
+            result = run_crew_squad(
+                squad_name=squad_name,
+                workflow_yaml_path=str(workflow_path),
+                personas_dir=str(base / "personas"),
+                llm_model=spec.model_id,
+                llm_base_url=spec.base_url,
+                llm_api_key=os.environ.get(spec.credential_env),
+                user_prompt=prompt,
+            )
+            result.setdefault("engine", "crewai")
+            return result
+
         outputs: Dict[str, Optional[str]] = {}
         for step in squad.workflow:
             persona = squad.personas.get(step.persona) or self.personas.get(step.persona)
