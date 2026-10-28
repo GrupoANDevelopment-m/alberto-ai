@@ -44,7 +44,7 @@ jobs:
           from alberto.engines.hermes import HermesEngine
 
           with tempfile.TemporaryDirectory(prefix="alberto-engine-check-") as home:
-              sandbox = LocalSandbox(home=Path(home))
+              sandbox = LocalSandbox(base_dir=Path(home))
               router = ModelRouter(ModelConfig(tasks={}))
               mimo = MiMoEngine(sandbox, router, mimo_home=Path(home) / ".mimo", auto_build=True)
               hermes = HermesEngine(sandbox, mimo=mimo, home=Path(home) / ".hermes")
@@ -71,9 +71,9 @@ jobs:
                   key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("NVIDIA_API_KEY")
                   if key:
                       if os.environ.get("OPENROUTER_API_KEY"):
-                          spec = ModelSpec("openrouter", "openrouter/free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY")
+                          spec = ModelSpec("openrouter", "openrouter/free", "https://openrouter.ai/api", "OPENROUTER_API_KEY")
                       else:
-                          spec = ModelSpec("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY")
+                          spec = ModelSpec("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com", "NVIDIA_API_KEY")
                       router.set_task("code", spec)
                       print("Attempting real MiMo.invoke -> configured model provider:", spec.provider, spec.model_id)
                       answer = mimo.invoke("Reply with exactly: MIMO_LIVE_RESPONSE_OK", task="code", max_tokens=40, temperature=0)
