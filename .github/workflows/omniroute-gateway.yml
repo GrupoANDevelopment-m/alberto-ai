@@ -27,7 +27,6 @@ jobs:
           node-version: "24"
 
       - name: Test existing Hermes and MiMo engines with a real model call when credentials exist
-        continue-on-error: true
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
