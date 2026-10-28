@@ -309,6 +309,21 @@ class Alberto:
 
             # Prepend Hermes/AIOX/NemoClaw context to system prompt
             integration_ctx = self._build_integration_context()
+            # Learner observations are persisted after each turn; these hints
+            # feed back into later turns so profile learning affects behavior.
+            try:
+                adaptation_hints = self.learner.get_adaptation_hints()
+                if adaptation_hints:
+                    adaptation_block = (
+                        "## Learned response preferences (user profile)\n"
+                        + json.dumps(adaptation_hints, ensure_ascii=False)
+                    )
+                    integration_ctx = (
+                        f"{integration_ctx}\n\n{adaptation_block}"
+                        if integration_ctx else adaptation_block
+                    )
+            except Exception:
+                pass
             if integration_ctx:
                 # Insert before the last user message
                 messages_with_ctx = messages[:-1] + [
@@ -435,6 +450,12 @@ class Alberto:
 
         conv.add("assistant", response_text)
         self.conversations.save(conv)
+        # Persist interaction-level learning. This is profile adaptation, not
+        # model-weight training; isolate failures so storage cannot break chat.
+        try:
+            self.learner.observe_interaction(prompt, response_text)
+        except Exception:
+            pass
 
         return {
             "response": response_text,
