@@ -67,35 +67,47 @@ class SkillManager:
         self._load_stats()
 
     def _load_all(self) -> None:
+        self.refresh()
+
+    def refresh(self) -> int:
+        """Refresh discovered skills while preserving statistics for skills still present.
+
+        Skills created by Learner after Alberto starts must become discoverable
+        immediately; a startup-only index otherwise makes newly-created skills
+        invisible until the next process restart.
+        """
         from alberto.upstream_bridge import list_upstream_skills
-        for s in list_upstream_skills():
-            self.index[s["name"]] = {
-                "name": s["name"],
-                "description": s.get("description", ""),
-                "category": s.get("category", ""),
-                "tags": s.get("tags", []),
-                "path": s.get("path", ""),
-                "version": s.get("version", "0.0.0"),
+        previous = getattr(self, "index", {})
+        refreshed = {}
+        for skill in list_upstream_skills():
+            name = skill["name"]
+            old_stats = previous.get(name, {}).get("stats", {})
+            refreshed[name] = {
+                "name": name,
+                "description": skill.get("description", ""),
+                "category": skill.get("category", ""),
+                "tags": skill.get("tags", []),
+                "path": skill.get("path", ""),
+                "version": skill.get("version", "0.0.0"),
                 "stats": {
-                    "success": 0, "fail": 0,
-                    "total_time": 0.0, "last_used": None,
-                }
+                    "success": int(old_stats.get("success", 0)),
+                    "fail": int(old_stats.get("fail", 0)),
+                    "total_time": float(old_stats.get("total_time", 0.0)),
+                    "last_used": old_stats.get("last_used"),
+                },
             }
+        self.index = refreshed
+        return len(refreshed)
 
     def _load_stats(self) -> None:
         if self._stats_path.exists():
             try:
                 stats = json.loads(self._stats_path.read_text())
                 for name, s in stats.items():
-                    if name in self.index:
+                    # Statistics never create phantom skills. A skill must be
+                    # present in the filesystem discovery pass to be executable.
+                    if name in self.index and isinstance(s, dict):
                         self.index[name]["stats"].update(s)
-                    else:
-                        # Auto-register dynamic skill from stats
-                        self.index[name] = {
-                            "name": name, "description": "(dynamic)",
-                            "category": "dynamic", "tags": [], "path": "",
-                            "version": "0.0.0", "stats": dict(s),
-                        }
             except Exception:
                 pass
         else:
@@ -372,6 +384,8 @@ class MetaController:
             evolved = self._try_evolve_skill(st.skill, error, obstacle)
             if evolved:
                 # Retry with evolved skill
+                self.skill_manager.refresh()
+                self.skill_manager._save_stats()
                 self._emit("skill_evolved", {"name": st.skill, "path": str(evolved)})
                 success2, output2, _ = self._try_skill(st, skill_override=st.skill)
                 if success2:
@@ -390,6 +404,8 @@ class MetaController:
                     obstacle, tried=[st.skill], workaround=f"see research cache"
                 )
                 if new_skill:
+                    self.skill_manager.refresh()
+                    self.skill_manager._save_stats()
                     self._emit("skill_created", {"path": str(new_skill)})
         # Final status
         st.status = "failed" if st.attempts >= st.max_attempts else "blocked"
