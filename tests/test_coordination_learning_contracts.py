@@ -100,7 +100,7 @@ def test_skill_catalog_refresh_discovers_new_skills_and_preserves_stats(tmp_path
     manager = meta_controller.SkillManager(agent)
     manager.record_outcome("existing-skill", success=True, duration=1.25)
 
-    discovered.append(
+    discovered.extend([
         {
             "name": "learned-skill",
             "description": "created during runtime",
@@ -108,12 +108,25 @@ def test_skill_catalog_refresh_discovers_new_skills_and_preserves_stats(tmp_path
             "tags": ["learned"],
             "path": "skills/user/learned-skill/SKILL.md",
             "version": "0.1.0",
-        }
-    )
-    assert manager.refresh() == 2
+            "executable": True,
+        },
+        {
+            "name": "documentation-only",
+            "description": "reference guidance only",
+            "category": "user",
+            "tags": ["docs"],
+            "path": "skills/user/documentation-only/SKILL.md",
+            "version": "0.1.0",
+            "executable": False,
+        },
+    ])
+    assert manager.refresh() == 3
     manager._save_stats()
 
     assert "learned-skill" in manager.index
+    assert "documentation-only" not in [
+        item["skill"]["name"] for item in manager.search("documentation-only", limit=10)
+    ]
     assert manager.index["existing-skill"]["stats"]["success"] == 1
     assert manager.index["existing-skill"]["stats"]["total_time"] == pytest.approx(1.25)
 
