@@ -95,6 +95,7 @@ class SkillManager:
                     "total_time": float(old_stats.get("total_time", 0.0)),
                     "last_used": old_stats.get("last_used"),
                 },
+                "available": True,
             }
         self.index = refreshed
         return len(refreshed)
@@ -104,10 +105,22 @@ class SkillManager:
             try:
                 stats = json.loads(self._stats_path.read_text())
                 for name, s in stats.items():
-                    # Statistics never create phantom skills. A skill must be
-                    # present in the filesystem discovery pass to be executable.
                     if name in self.index and isinstance(s, dict):
                         self.index[name]["stats"].update(s)
+                    elif isinstance(s, dict):
+                        # Keep historical metrics for removed/ephemeral skills,
+                        # but mark them unavailable so they cannot be selected or run.
+                        self.index[name] = {
+                            "name": name, "description": "(statistics only)",
+                            "category": "historical", "tags": [], "path": "",
+                            "version": "0.0.0", "available": False,
+                            "stats": {
+                                "success": int(s.get("success", 0)),
+                                "fail": int(s.get("fail", 0)),
+                                "total_time": float(s.get("total_time", 0.0)),
+                                "last_used": s.get("last_used"),
+                            },
+                        }
             except Exception:
                 pass
         else:
@@ -119,7 +132,8 @@ class SkillManager:
         self._stats_path.write_text(json.dumps(data, indent=2))
 
     def total(self) -> int:
-        return len(self.index)
+        """Count discovered executable skills, excluding statistics-only history."""
+        return sum(1 for skill in self.index.values() if skill.get("available", bool(skill.get("path"))))
 
     def list_skills(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
         skills = list(self.index.values())
@@ -136,6 +150,8 @@ class SkillManager:
         q_words = set(re.findall(r"\w+", query.lower()))
         scored = []
         for s in self.index.values():
+            if not s.get("available", bool(s.get("path"))):
+                continue
             text = (s["name"] + " " + s["description"] + " " +
                     " ".join(s["tags"]) + " " + s["category"]).lower()
             score = sum(1 for w in q_words if w in text) / max(len(q_words), 1)
@@ -171,7 +187,7 @@ class SkillManager:
             self.index[skill_name] = {
                 "name": skill_name, "description": "(auto-registered)",
                 "category": "dynamic", "tags": [], "path": "",
-                "version": "0.0.0",
+                "version": "0.0.0", "available": False,
                 "stats": {"success": 0, "fail": 0, "total_time": 0.0, "last_used": None}
             }
         stats = self.index[skill_name]["stats"]
