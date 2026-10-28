@@ -3,9 +3,9 @@ name: CI
 # Alberto AI v1.8 CI pipeline (closes G-O1)
 on:
   push:
-    branches: [main, master, audit/integrated-hardening]
+    branches: [main, master, audit/integrated-hardening, audit/omniroute-gateway-validation]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, audit/integrated-hardening]
   workflow_dispatch:
 
 # Keep only the newest validation run for this branch/PR to avoid stale runs
