@@ -291,19 +291,19 @@ class Learner:
     def observe_interaction(self, user_msg: str, response: str) -> None:
         """Track user patterns and adapt."""
         self.profile["interactions"] = self.profile.get("interactions", 0) + 1
-        # Extract topics (simple word frequency)
-        words = re.findall(r"\b[a-zà-ú]{4,}\b", user_msg.lower())
-        for w in words:
-            self.profile.setdefault("common_topics", {}).setdefault(w, 0)
-            self.profile["common_topics"][w] += 1
-        # Detect language
-        pt_indicators = ["que", "para", "não", "você", "como", "mais", "está", "então"]
-        en_indicators = ["the", "and", "is", "you", "are", "what", "how", "for"]
-        pt_count = sum(1 for w in words if w in pt_indicators)
-        en_count = sum(1 for w in words if w in en_indicators)
+        # Track topics separately from short function words used for language detection.
+        tokens = re.findall(r"\\b[a-zà-ú]{2,}\\b", user_msg.lower())
+        words = [word for word in tokens if len(word) >= 4]
+        for word in words:
+            self.profile.setdefault("common_topics", {}).setdefault(word, 0)
+            self.profile["common_topics"][word] += 1
+        pt_indicators = {"que", "para", "não", "voce", "você", "como", "mais", "está", "então", "uma", "isso"}
+        en_indicators = {"the", "and", "is", "you", "are", "what", "how", "for", "with", "this"}
+        pt_count = sum(1 for word in tokens if word in pt_indicators)
+        en_count = sum(1 for word in tokens if word in en_indicators)
         if pt_count > en_count:
-            self.profile["preferences"]["language"] = "pt-BR"
-        elif en_count > 0:
+            self.profile["preferences"]["language"] = "pt"
+        elif en_count > pt_count:
             self.profile["preferences"]["language"] = "en"
         # Detect style preferences
         if "rápido" in user_msg.lower() or "resum" in user_msg.lower():
@@ -316,8 +316,8 @@ class Learner:
         """Return hints to adapt responses based on profile."""
         prefs = self.profile.get("preferences", {})
         hints = {}
-        if prefs.get("language") == "pt-BR":
-            hints["language"] = "Respond in Brazilian Portuguese"
+        if prefs.get("language") == "pt":
+            hints["language"] = "Respond in Portuguese"
         if prefs.get("response_style") == "concise":
             hints["style"] = "Be brief and direct"
         elif prefs.get("response_style") == "detailed":
