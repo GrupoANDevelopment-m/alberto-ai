@@ -343,7 +343,9 @@ class Alberto:
 
             if strat.mode == "squad" and strat.squad:
                 # Squad mode: run the pipeline, but also include the LLM-generated summary as natural response
-                squad_result = self.run_squad(strat.squad, prompt)
+                squad_result = self.run_squad(
+                    strat.squad, prompt, context_messages=messages
+                )
                 squad_text = self._format_squad_result(squad_result)
                 response_text = squad_text
             elif strat.mode == "speculative":
@@ -484,8 +486,11 @@ class Alberto:
         return winner.get("content", "[max mode: no winner]")
 
     # ===== Squad execution =====
-    def run_squad(self, squad_name: str, prompt: str) -> Dict:
-        """Coordinate a squad through Alberto's native runner or configured CrewAI adapter.
+    def run_squad(
+        self, squad_name: str, prompt: str, *,
+        context_messages: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict:
+        """Coordinate a squad while preserving the active conversation context.
 
         Alberto remains the entry point and decision-maker. CrewAI is an optional
         execution backend for a squad, not a coordinator of Alberto, Hermes, or MiMo.
@@ -493,6 +498,25 @@ class Alberto:
         squad = self.catalog.get(squad_name)
         if squad is None:
             return {"error": f"unknown squad: {squad_name}"}
+
+        # Squad execution used to receive only the latest user message, dropping
+        # the conversation context already assembled by Alberto. Preserve recent
+        # turns and system context across the delegation boundary, within a bound.
+        if context_messages:
+            context_parts = []
+            for message in context_messages:
+                role = str(message.get("role", "user"))
+                content = str(message.get("content", ""))
+                if role == "user" and content.strip() == prompt.strip():
+                    continue
+                if content.strip():
+                    context_parts.append(f"[{role}] {content[:1200]}")
+            context_text = "\n\n".join(context_parts[-12:])[:8000]
+            if context_text:
+                prompt = (
+                    "ALBERTO CONVERSATION CONTEXT (preserve relevant constraints and prior decisions):\n"
+                    f"{context_text}\n\nCURRENT USER REQUEST:\n{prompt}"
+                )
 
         squad_engine = os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower()
         if squad_engine == "crewai":
