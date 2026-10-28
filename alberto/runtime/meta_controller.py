@@ -388,6 +388,18 @@ class MetaController:
         # Failure path: research, learn, evolve, create new skill
         self.skill_manager.record_outcome(st.skill, success=False,
                                           duration=time.time() - st.started_at)
+        # Snapshot user-owned skill content for rollback if an evolved patch fails.
+        original_skill_path = None
+        original_skill_content = None
+        try:
+            from alberto.runtime.skill_engine import find_skill
+            candidate_path = find_skill(st.skill)
+            if candidate_path is not None:
+                candidate_path.resolve().relative_to(self.learner.user_skills_dir.resolve())
+                original_skill_path = candidate_path
+                original_skill_content = candidate_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
         # Detect obstacle
         obstacle = self._detect_obstacle(st)
         if obstacle:
@@ -421,6 +433,12 @@ class MetaController:
                     )
                     self._emit("subtask_recovered", {"id": st.id})
                     return
+                # Failed patch: restore original skill and refresh the catalog.
+                if original_skill_path is not None and original_skill_content is not None:
+                    original_skill_path.write_text(original_skill_content, encoding="utf-8")
+                    self.skill_manager.refresh()
+                    self.skill_manager._save_stats()
+                    self._emit("skill_evolution_rolled_back", {"name": st.skill})
             # 4. Create new skill if obstacle is novel
             if research.get("total_hits", 0) == 0:
                 new_skill = self.learner.overcome_obstacle(
@@ -470,13 +488,48 @@ class MetaController:
         return True, result.get("stdout", ""), ""
 
     def _try_evolve_skill(self, name: str, error: str, obstacle: str):
-        """Evolve a skill after failure."""
+        """Ask MiMo for a concrete patch; prose-only changes are rejected."""
         try:
+            from alberto.runtime.skill_engine import find_skill
+            path = find_skill(name)
+            if path is None:
+                return None
+            path.resolve().relative_to(self.learner.user_skills_dir.resolve())
+            source = path.read_text(encoding="utf-8", errors="replace")
+            prompt = (
+                "Propose a small, testable patch to this Alberto skill. Return JSON only "
+                "with 'improvements' (string) and 'code_blocks' (non-empty list of "
+                "{lang, code}); lang must be bash or python. Replace the primary "
+                "executable block with a corrected version. Do not add network access, "
+                "privilege escalation, destructive actions, or sandbox-policy bypasses. "
+                "If no safe improvement is possible, return an empty code_blocks list.\n\n"
+                + "Failure obstacle: " + str(obstacle)[:500]
+                + "\nError: " + str(error)[:1000]
+                + "\nCurrent SKILL.md (truncated):\n" + source[:8000]
+            )
+            raw = self.alberto.mimo.invoke(
+                prompt, task="code", max_tokens=1800, temperature=0.1
+            )
+            if not isinstance(raw, str):
+                return None
+            candidate = raw.strip()
+            fence = chr(96) * 3
+            if candidate.startswith(fence):
+                pattern = r"^" + re.escape(fence) + r"(?:json)?\s*|\s*" + re.escape(fence) + r"$"
+                candidate = re.sub(pattern, "", candidate, flags=re.I).strip()
+            proposal = json.loads(candidate)
+            improvements = proposal.get("improvements")
+            code_blocks = proposal.get("code_blocks")
+            if not isinstance(improvements, str) or not improvements.strip():
+                return None
+            if not isinstance(code_blocks, list) or not code_blocks:
+                return None
             return self.learner.evolve_skill(
-                name,
-                improvements=f"Auto-evolved after failure: {obstacle}\nError: {error}\nAdded: better error handling",
+                name, improvements=improvements, new_code_blocks=code_blocks
             )
         except Exception:
+            # Missing credentials, malformed output, or policy validation must
+            # not mutate the skill or interrupt the user's task.
             return None
 
     def _detect_obstacle(self, st: SubTask) -> Optional[str]:
