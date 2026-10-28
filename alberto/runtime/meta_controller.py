@@ -136,7 +136,10 @@ class SkillManager:
         return sum(1 for skill in self.index.values() if skill.get("available", bool(skill.get("path"))))
 
     def list_skills(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        skills = list(self.index.values())
+        skills = [
+            skill for skill in self.index.values()
+            if skill.get("available", bool(skill.get("path")))
+        ]
         if category:
             skills = [s for s in skills if s["category"] == category]
         return skills
