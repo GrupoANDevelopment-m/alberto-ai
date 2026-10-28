@@ -149,6 +149,19 @@ class Alberto:
             "active_squad": self.catalog.active_squad,
             "models": self.router.list_tasks(),
             "upstream": get_upstream_summary(),
+            "coordination": {
+                "squad_engine": os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower(),
+                "crewai": __import__(
+                    "alberto.runtime.crewai_runtime", fromlist=["get_crewai_status"]
+                ).get_crewai_status(),
+                "hermes_tool_dispatch": True,
+                "mimo_model_fallback": True,
+            },
+            "learning": {
+                "profile_interactions": int(self.learner.profile.get("interactions", 0)),
+                "stored_lessons": len(self.learner.lessons),
+                "skills_discovered": self.skill_manager.total(),
+            },
         }
 
     # ===== Chat (natural conversation) =====
