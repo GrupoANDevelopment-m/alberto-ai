@@ -131,6 +131,14 @@ def list_upstream_skills() -> List[Dict[str, str]]:
                     category = rel.parts[0] if len(rel.parts) > 1 else "root"
                 except ValueError:
                     category = "external"
+                # A SKILL.md can be useful as model guidance without containing
+                # executable commands. Distinguish those from skills the runtime
+                # can actually execute through skill_engine.run_skill().
+                import re
+                executable = bool(re.search(
+                    r"```(?:bash|sh|shell|python|python3|py)\\s*\\n",
+                    content, re.I,
+                ))
                 skills.append({
                     "name": name,
                     "description": (meta.get("description") or "").strip()[:200],
@@ -140,6 +148,7 @@ def list_upstream_skills() -> List[Dict[str, str]]:
                             meta.get("metadata", {}).get("hermes", {}).get("tags", []),
                     "path": str(skill_md.relative_to(ALBERTO_ROOT)),
                     "author": meta.get("metadata", {}).get("author", "unknown"),
+                    "executable": executable,
                 })
             except Exception:
                 pass
