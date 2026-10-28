@@ -271,3 +271,39 @@ def test_alberto_preserves_recent_context_when_delegating_to_native_squad():
     assert "Hermes and MiMo are components." in submitted
     assert "CURRENT USER REQUEST" in submitted
     assert "What did we decide?" in submitted
+
+
+def test_meta_controller_skill_evolution_requires_a_concrete_mimo_patch(tmp_path, monkeypatch):
+    import json
+    from alberto.runtime import skill_engine, meta_controller
+    from alberto.runtime.learner import Learner
+
+    learner = Learner(SimpleNamespace(home=lambda: tmp_path / "home"), mimo=None)
+    learner.user_skills_dir = tmp_path / "skills" / "user"
+    path = learner.create_skill(
+        "evolution-candidate",
+        description="A test skill",
+        content="Run:\n\n```bash\necho old\n```",
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda _name: path)
+
+    class FakeMiMo:
+        def invoke(self, prompt, **kwargs):
+            assert "Failure obstacle" in prompt
+            assert kwargs["task"] == "code"
+            return json.dumps({
+                "improvements": "Corrected the command output.",
+                "code_blocks": [{"lang": "bash", "code": "echo improved"}],
+            })
+
+    controller = SimpleNamespace(
+        learner=learner,
+        alberto=SimpleNamespace(mimo=FakeMiMo()),
+    )
+    evolved = meta_controller.MetaController._try_evolve_skill(
+        controller, "evolution-candidate", "unexpected output", "output mismatch"
+    )
+
+    assert evolved == path
+    assert "echo improved" in path.read_text(encoding="utf-8")
+    assert "echo old" not in path.read_text(encoding="utf-8")
