@@ -30,6 +30,7 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ALBERTO_RUN_LIVE_MODEL_TESTS: ${{ vars.ALBERTO_RUN_LIVE_MODEL_TESTS }}
         run: |
           set -u
           python - <<'PY'
@@ -67,12 +68,17 @@ jobs:
                   else:
                       print("PASS: Hermes executed a real Python task.")
 
+                  run_live = os.environ.get("ALBERTO_RUN_LIVE_MODEL_TESTS", "").strip() == "1"
                   key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("NVIDIA_API_KEY")
-                  if key:
+                  if run_live:
+                      if not key:
+                          raise RuntimeError(
+                              "ALBERTO_RUN_LIVE_MODEL_TESTS=1 but no OPENROUTER_API_KEY or NVIDIA_API_KEY secret is configured"
+                          )
                       if os.environ.get("OPENROUTER_API_KEY"):
                           spec = ModelSpec("openrouter", "openrouter/free", "https://openrouter.ai/api", "OPENROUTER_API_KEY")
                       else:
-                          spec = ModelSpec("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com", "NVIDIA_API_KEY")
+                          spec = ModelSpec("nvidia", "nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com", "NVIDIA_API_KEY")
                       router.set_task("code", spec)
                       print("Attempting real MiMo.invoke -> configured model provider:", spec.provider, spec.model_id)
                       answer = mimo.invoke("Reply with exactly: MIMO_LIVE_RESPONSE_OK", task="code", max_tokens=40, temperature=0)
@@ -83,8 +89,7 @@ jobs:
                       else:
                           print("PASS: MiMo delivered a real model response.")
                   else:
-                      print("MODEL_CALL_NOT_RUN: no NVIDIA_API_KEY or OPENROUTER_API_KEY GitHub Actions secret is configured.")
-                      print("MiMo's invoke path needs either a working MiMo binary with its own model auth or a credentialed model_router.")
+                      print("MODEL_CALL_NOT_RUN: live inference is opt-in; set repository variable ALBERTO_RUN_LIVE_MODEL_TESTS=1 after provider credentials are configured.")
               except Exception as exc:
                   print("ENGINE_TEST_ERROR:", type(exc).__name__, str(exc))
                   traceback.print_exc()
