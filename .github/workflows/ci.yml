@@ -60,6 +60,7 @@ jobs:
               "tests/test_function_caller_hardening.py",
               "tests/test_agent_core_hardening.py",
               "tests/test_frontend_browser_e2e.py",
+              "tests/test_coordination_learning_contracts.py",
           )
           for test_path in required:
               count = workflow.count(test_path)
@@ -88,7 +89,7 @@ jobs:
           NVIDIA_API_KEY: ""
           OPENAI_API_KEY: ""
         run: |
-          python -m pytest tests/test_meta.py tests/test_v15_real.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py tests/test_runtime_deep_contracts.py tests/test_cli_conversation_contracts.py tests/test_hermes_dispatch_contracts.py tests/test_frontend_browser_e2e.py tests/test_smoke.py -m "not network and not llm and not slow" -v --tb=short
+          python -m pytest tests/test_meta.py tests/test_v15_real.py tests/test_v182_hermes_tools.py tests/test_v18_real_tools.py tests/test_v18_upstream_bridge.py tests/test_v18_workflows.py tests/test_v183_crewai.py tests/test_runtime_deep_contracts.py tests/test_cli_conversation_contracts.py tests/test_hermes_dispatch_contracts.py tests/test_frontend_browser_e2e.py tests/test_coordination_learning_contracts.py tests/test_smoke.py -m "not network and not llm and not slow" -v --tb=short
 
       - name: Generate coverage report
         env:
