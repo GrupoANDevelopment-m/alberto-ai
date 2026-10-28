@@ -373,6 +373,8 @@ def main(argv: List[str]) -> int:
     p_es = sub.add_parser("evolve-skill")
     p_es.add_argument("name")
     p_es.add_argument("--improvements", required=True)
+    p_es.add_argument("--code-blocks", default="[]",
+                      help="JSON array of executable skill updates")
     p_ll = sub.add_parser("lesson")
     p_ll.add_argument("--mistake", required=True)
     p_ll.add_argument("--why", default="")
@@ -398,8 +400,17 @@ def main(argv: List[str]) -> int:
         path = learner.create_skill(args.name, description=args.description, content=args.content, category=args.category)
         print(f"created: {path}")
     elif args.cmd == "evolve-skill":
-        path = learner.evolve_skill(args.name, improvements=args.improvements)
-        print(f"evolved: {path}")
+        try:
+            code_blocks = json.loads(args.code_blocks or "[]")
+            path = learner.evolve_skill(
+                args.name, improvements=args.improvements,
+                new_code_blocks=code_blocks,
+            )
+            print(f"evolved: {path}")
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"skill evolution refused: {exc}")
+            a.shutdown()
+            return 1
     elif args.cmd == "lesson":
         l = learner.lesson_learned(mistake=args.mistake, why=args.why, fix=args.fix, context=args.context, severity=args.severity)
         print(f"lesson recorded: {l['id']}")
