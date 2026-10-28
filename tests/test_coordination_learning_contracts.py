@@ -178,3 +178,47 @@ def test_alberto_can_delegate_squad_execution_to_crewai(monkeypatch):
     assert calls[0]["llm_api_key"] == "test-only-placeholder"
     assert calls[0]["user_prompt"] == "preserve this exact request"
     assert Path(calls[0]["workflow_yaml_path"]).name == "engineering.yaml"
+
+
+def test_skill_evolution_changes_executable_block_and_bumps_quoted_version(tmp_path, monkeypatch):
+    from alberto.runtime import skill_engine
+    from alberto.runtime.learner import Learner
+
+    learner = Learner(SimpleNamespace(home=lambda: tmp_path / "home"), mimo=None)
+    learner.user_skills_dir = tmp_path / "skills" / "user"
+    path = learner.create_skill(
+        "runtime-skill",
+        description="A test skill",
+        content="Run this command:\n\n```bash\necho old\n```",
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda _name: path)
+
+    evolved = learner.evolve_skill(
+        "runtime-skill",
+        improvements="The command now emits the revised marker.",
+        new_code_blocks=[{"lang": "bash", "code": "echo revised"}],
+    )
+    text = evolved.read_text(encoding="utf-8")
+    assert "```bash\necho revised\n```" in text
+    assert "echo old" not in text
+    assert 'version: "0.1.1"' in text
+
+
+def test_skill_evolution_rejects_prose_only_changes(tmp_path, monkeypatch):
+    from alberto.runtime import skill_engine
+    from alberto.runtime.learner import Learner
+
+    learner = Learner(SimpleNamespace(home=lambda: tmp_path / "home"), mimo=None)
+    learner.user_skills_dir = tmp_path / "skills" / "user"
+    path = learner.create_skill(
+        "runtime-skill",
+        description="A test skill",
+        content="Run this command:\n\n```bash\necho stable\n```",
+    )
+    monkeypatch.setattr(skill_engine, "find_skill", lambda _name: path)
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="concrete executable code blocks"):
+        learner.evolve_skill("runtime-skill", improvements="This is only prose.")
+
+    assert path.read_text(encoding="utf-8") == before
