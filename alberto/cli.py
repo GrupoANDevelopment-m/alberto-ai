@@ -375,8 +375,17 @@ def cmd_learn(args, alberto):
         )
         print(f"created: {path}")
     elif a == "evolve-skill" and args.learn_args:
-        path = alberto.learner.evolve_skill(args.learn_args[0], improvements=args.improvements or "")
-        print(f"evolved: {path}")
+        try:
+            code_blocks = json.loads(args.code_blocks or "[]")
+            path = alberto.learner.evolve_skill(
+                args.learn_args[0],
+                improvements=args.improvements or "",
+                new_code_blocks=code_blocks,
+            )
+            print(f"evolved: {path}")
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"skill evolution refused: {exc}")
+            return 1
     elif a == "lesson":
         l = alberto.learner.lesson_learned(
             mistake=args.mistake, why=args.why, fix=args.fix,
@@ -730,6 +739,10 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--content", default=None)
     p.add_argument("--category", default="user")
     p.add_argument("--improvements", default=None)
+    p.add_argument(
+        "--code-blocks", default="[]",
+        help='JSON array of executable skill updates, e.g. [{"lang":"bash","code":"echo updated"}]',
+    )
     p.add_argument("--mistake", default=None)
     p.add_argument("--why", default="")
     p.add_argument("--fix", default=None)
