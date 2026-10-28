@@ -26,6 +26,76 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Test existing Hermes and MiMo engines with a real model call when credentials exist
+        continue-on-error: true
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -u
+          python - <<'PY'
+          import os, sys, tempfile, traceback
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd()))
+          from alberto.sandbox import LocalSandbox
+          from alberto.model_router import ModelConfig, ModelRouter, ModelSpec
+          from alberto.engines.mimo import MiMoEngine
+          from alberto.engines.hermes import HermesEngine
+
+          with tempfile.TemporaryDirectory(prefix="alberto-engine-check-") as home:
+              sandbox = LocalSandbox(home=Path(home))
+              router = ModelRouter(ModelConfig(tasks={}))
+              mimo = MiMoEngine(sandbox, router, mimo_home=Path(home) / ".mimo", auto_build=True)
+              hermes = HermesEngine(sandbox, mimo=mimo, home=Path(home) / ".hermes")
+              try:
+                  mimo.start()
+                  hermes.start()
+                  print("MiMo running:", mimo.is_running())
+                  print("MiMo binary:", mimo.binary or "NOT FOUND (will require configured model router)")
+                  print("Hermes running:", hermes.is_running())
+                  print("Hermes tools discovered:", len(hermes.available_tools()))
+
+                  # Real execution through Hermes' code-execution interface.
+                  execution = hermes.code_execution(
+                      "print('HERMES_REAL_EXECUTION_OK')", timeout=20
+                  )
+                  print("Hermes code execution return code:", execution.get("returncode"))
+                  print("Hermes code execution stdout:", (execution.get("stdout") or "").strip())
+                  if execution.get("returncode") != 0 or "HERMES_REAL_EXECUTION_OK" not in (execution.get("stdout") or ""):
+                      print("FAIL: Hermes code-execution path did not return the expected output.")
+                      sys.exit_code = 1
+                  else:
+                      print("PASS: Hermes executed a real Python task.")
+
+                  key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("NVIDIA_API_KEY")
+                  if key:
+                      if os.environ.get("OPENROUTER_API_KEY"):
+                          spec = ModelSpec("openrouter", "openrouter/free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY")
+                      else:
+                          spec = ModelSpec("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY")
+                      router.set_task("code", spec)
+                      print("Attempting real MiMo.invoke -> configured model provider:", spec.provider, spec.model_id)
+                      answer = mimo.invoke("Reply with exactly: MIMO_LIVE_RESPONSE_OK", task="code", max_tokens=40, temperature=0)
+                      print("MiMo model response:", answer[:1000])
+                      if not isinstance(answer, str) or "MIMO_LIVE_RESPONSE_OK" not in answer:
+                          print("FAIL: MiMo returned a response but not the expected marker.")
+                          sys.exit_code = 1
+                      else:
+                          print("PASS: MiMo delivered a real model response.")
+                  else:
+                      print("MODEL_CALL_NOT_RUN: no NVIDIA_API_KEY or OPENROUTER_API_KEY GitHub Actions secret is configured.")
+                      print("MiMo's invoke path needs either a working MiMo binary with its own model auth or a credentialed model_router.")
+              except Exception as exc:
+                  print("ENGINE_TEST_ERROR:", type(exc).__name__, str(exc))
+                  traceback.print_exc()
+                  sys.exit_code = 1
+              finally:
+                  hermes.stop()
+                  mimo.stop()
+              raise SystemExit(getattr(sys, "exit_code", 0))
+          PY
+
       - name: Install OmniRoute, start gateway, and verify health
         shell: bash
         run: |
