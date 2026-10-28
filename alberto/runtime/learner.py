@@ -204,17 +204,17 @@ class Learner:
         # an unreachable second code block to SKILL.md.
         fence = chr(96) * 3
         executable = re.search(
-            rf"{fence}(bash|sh|shell|python|python3|py)\\n.*?\\n{fence}",
+            rf"{fence}(bash|sh|shell|python|python3|py)\n.*?\n{fence}",
             content, re.S | re.I,
         )
         if not executable:
             raise ValueError("cannot evolve a skill without an existing executable code block")
         first = new_code_blocks[0]
-        new_primary = f"{fence}{first.get('lang', 'bash').lower()}\\n{first['code']}\\n{fence}"
+        new_primary = f"{fence}{first.get('lang', 'bash').lower()}\n{first['code']}\n{fence}"
         content = content[:executable.start()] + new_primary + content[executable.end():]
 
         # Bump version, including JSON-quoted YAML scalars produced by create_skill.
-        m = re.search(r"(?m)^version:\\s*[\\\"\\']?(\\d+\\.\\d+\\.\\d+)[\\\"\\']?\\s*$", content)
+        m = re.search(r'(?m)^version:\s*["']?(\d+\.\d+\.\d+)["']?\s*$', content)
         if m:
             old = m.group(1)
             parts = list(map(int, old.split(".")))
@@ -234,14 +234,14 @@ class Learner:
         else:
             new_version = "0.0.1"
 
-        evolution_section = f"\\n\\n## Evolution (v{new_version})\\n\\n{improvements}\\n"
+        evolution_section = f"\n\n## Evolution (v{new_version})\n\n{improvements}\n"
         for extra in new_code_blocks[1:]:
             extra_lang = extra.get("lang", "bash").lower()
             evolution_section += (
-                f"\\n\\nAdditional executable reference ({extra_lang}):\\n\\n"
-                f"{fence}{extra_lang}\\n{extra['code']}\\n{fence}\\n"
+                f"\n\nAdditional executable reference ({extra_lang}):\n\n"
+                f"{fence}{extra_lang}\n{extra['code']}\n{fence}\n"
             )
-        content = content.rstrip() + "\\n" + evolution_section
+        content = content.rstrip() + "\n" + evolution_section
         path.write_text(content, encoding="utf-8")
         return path
 
