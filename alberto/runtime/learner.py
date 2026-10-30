@@ -292,7 +292,7 @@ class Learner:
         """Track user patterns and adapt."""
         self.profile["interactions"] = self.profile.get("interactions", 0) + 1
         # Track topics separately from short function words used for language detection.
-        tokens = re.findall(r"\\b[a-zà-ú]{2,}\\b", user_msg.lower())
+        tokens = re.findall(r"\b[a-zà-ú]{2,}\b", user_msg.lower())
         words = [word for word in tokens if len(word) >= 4]
         for word in words:
             self.profile.setdefault("common_topics", {}).setdefault(word, 0)
