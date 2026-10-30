@@ -307,3 +307,33 @@ def test_meta_controller_skill_evolution_requires_a_concrete_mimo_patch(tmp_path
     assert evolved == path
     assert "echo improved" in path.read_text(encoding="utf-8")
     assert "echo old" not in path.read_text(encoding="utf-8")
+
+
+def test_skill_discovery_marks_executable_and_guidance_only_skills_correctly(tmp_path, monkeypatch):
+    from alberto import upstream_bridge
+
+    hermes_root = tmp_path / "hermes-skills"
+    local_root = tmp_path / "local-skills"
+    for root in (hermes_root, local_root):
+        root.mkdir(parents=True, exist_ok=True)
+    runnable = hermes_root / "tools" / "runnable"
+    guidance = local_root / "guidance"
+    runnable.mkdir(parents=True)
+    guidance.mkdir(parents=True)
+    (runnable / "SKILL.md").write_text(
+        "---\nname: runnable\ndescription: runnable test skill\nversion: 1.0.0\n---\n"
+        "Run the command:\n\n```bash\necho ok\n```\n",
+        encoding="utf-8",
+    )
+    (guidance / "SKILL.md").write_text(
+        "---\nname: guidance\ndescription: guidance only\nversion: 1.0.0\n---\n"
+        "Use this as reference, without executable commands.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(upstream_bridge, "HERMES_SKILLS", hermes_root)
+    monkeypatch.setattr(upstream_bridge, "LOCAL_SKILLS", local_root)
+    monkeypatch.setattr(upstream_bridge, "ALBERTO_ROOT", tmp_path)
+
+    discovered = {item["name"]: item for item in upstream_bridge.list_upstream_skills()}
+    assert discovered["runnable"]["executable"] is True
+    assert discovered["guidance"]["executable"] is False
