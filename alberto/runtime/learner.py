@@ -177,13 +177,47 @@ class Learner:
             raise ValueError("only user-created skills may be evolved")
         if path.is_symlink() or path.resolve().is_symlink():
             raise ValueError("symlinked skills may not be evolved")
+        if not isinstance(improvements, str) or not improvements.strip() or len(improvements) > 12000:
+            raise ValueError("improvements must be non-empty text up to 12000 characters")
+        if not isinstance(new_code_blocks, list) or not new_code_blocks:
+            raise ValueError(
+                "skill evolution requires concrete executable code blocks; "
+                "prose-only notes are lessons, not an operational skill improvement"
+            )
+        if len(new_code_blocks) > 20:
+            raise ValueError("at most 20 evolution code blocks are allowed")
+        total_code_chars = 0
+        for block in new_code_blocks:
+            if not isinstance(block, dict) or not isinstance(block.get("code"), str):
+                raise ValueError("each evolution code block requires string code")
+            lang = block.get("lang", "bash")
+            if not isinstance(lang, str) or lang.lower() not in {"bash", "sh", "shell", "python", "python3", "py"}:
+                raise ValueError("evolution blocks must use an executable bash or Python language")
+            if not block["code"].strip():
+                raise ValueError("evolution code blocks cannot be empty")
+            total_code_chars += len(block["code"])
+        if total_code_chars > 100000:
+            raise ValueError("combined evolution code exceeds 100000 characters")
+
         content = path.read_text(encoding="utf-8", errors="replace")
-        # Bump version
-        m = re.search(r"version:\s*(\d+\.\d+\.\d+)", content)
+        # Evolution must change the executable path, not merely append prose or
+        # an unreachable second code block to SKILL.md.
+        fence = chr(96) * 3
+        executable = re.search(
+            rf"{fence}(bash|sh|shell|python|python3|py)\n.*?\n{fence}",
+            content, re.S | re.I,
+        )
+        if not executable:
+            raise ValueError("cannot evolve a skill without an existing executable code block")
+        first = new_code_blocks[0]
+        new_primary = f"{fence}{first.get('lang', 'bash').lower()}\n{first['code']}\n{fence}"
+        content = content[:executable.start()] + new_primary + content[executable.end():]
+
+        # Bump version, including JSON-quoted YAML scalars produced by create_skill.
+        m = re.search(r"(?m)^version:\s*[\"']?(\d+\.\d+\.\d+)[\"']?\s*$", content)
         if m:
             old = m.group(1)
             parts = list(map(int, old.split(".")))
-            # Bump patch by default
             if version_bump == "0.0.1":
                 parts[2] += 1
             elif version_bump == "0.1.0":
@@ -193,16 +227,22 @@ class Learner:
                 parts[0] += 1
                 parts[1] = 0
                 parts[2] = 0
+            else:
+                raise ValueError("version_bump must be 0.0.1, 0.1.0, or 1.0.0")
             new_version = ".".join(map(str, parts))
-            content = content.replace(f"version: {old}", f"version: {new_version}", 1)
-        # Append evolution section
-        evolution_section = f"\n\n## Evolution (v{new_version if m else '0.0.1'})\n\n{improvements}\n"
-        if new_code_blocks:
-            for b in new_code_blocks:
-                evolution_section += f"\n```{b.get('lang', 'bash')}\n{b['code']}\n```\n"
-        # Insert before the last H1 or append
+            content = content[:m.start(1)] + new_version + content[m.end(1):]
+        else:
+            new_version = "0.0.1"
+
+        evolution_section = f"\n\n## Evolution (v{new_version})\n\n{improvements}\n"
+        for extra in new_code_blocks[1:]:
+            extra_lang = extra.get("lang", "bash").lower()
+            evolution_section += (
+                f"\n\nAdditional executable reference ({extra_lang}):\n\n"
+                f"{fence}{extra_lang}\n{extra['code']}\n{fence}\n"
+            )
         content = content.rstrip() + "\n" + evolution_section
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
         return path
 
     # ====== Lesson learned ======
@@ -251,19 +291,19 @@ class Learner:
     def observe_interaction(self, user_msg: str, response: str) -> None:
         """Track user patterns and adapt."""
         self.profile["interactions"] = self.profile.get("interactions", 0) + 1
-        # Extract topics (simple word frequency)
-        words = re.findall(r"\b[a-zà-ú]{4,}\b", user_msg.lower())
-        for w in words:
-            self.profile.setdefault("common_topics", {}).setdefault(w, 0)
-            self.profile["common_topics"][w] += 1
-        # Detect language
-        pt_indicators = ["que", "para", "não", "você", "como", "mais", "está", "então"]
-        en_indicators = ["the", "and", "is", "you", "are", "what", "how", "for"]
-        pt_count = sum(1 for w in words if w in pt_indicators)
-        en_count = sum(1 for w in words if w in en_indicators)
+        # Track topics separately from short function words used for language detection.
+        tokens = re.findall(r"\b[a-zà-ú]{2,}\b", user_msg.lower())
+        words = [word for word in tokens if len(word) >= 4]
+        for word in words:
+            self.profile.setdefault("common_topics", {}).setdefault(word, 0)
+            self.profile["common_topics"][word] += 1
+        pt_indicators = {"que", "para", "não", "voce", "você", "como", "mais", "está", "então", "uma", "isso"}
+        en_indicators = {"the", "and", "is", "you", "are", "what", "how", "for", "with", "this"}
+        pt_count = sum(1 for word in tokens if word in pt_indicators)
+        en_count = sum(1 for word in tokens if word in en_indicators)
         if pt_count > en_count:
-            self.profile["preferences"]["language"] = "pt-BR"
-        elif en_count > 0:
+            self.profile["preferences"]["language"] = "pt"
+        elif en_count > pt_count:
             self.profile["preferences"]["language"] = "en"
         # Detect style preferences
         if "rápido" in user_msg.lower() or "resum" in user_msg.lower():
@@ -276,8 +316,8 @@ class Learner:
         """Return hints to adapt responses based on profile."""
         prefs = self.profile.get("preferences", {})
         hints = {}
-        if prefs.get("language") == "pt-BR":
-            hints["language"] = "Respond in Brazilian Portuguese"
+        if prefs.get("language") == "pt":
+            hints["language"] = "Respond in Portuguese"
         if prefs.get("response_style") == "concise":
             hints["style"] = "Be brief and direct"
         elif prefs.get("response_style") == "detailed":
@@ -333,6 +373,8 @@ def main(argv: List[str]) -> int:
     p_es = sub.add_parser("evolve-skill")
     p_es.add_argument("name")
     p_es.add_argument("--improvements", required=True)
+    p_es.add_argument("--code-blocks", default="[]",
+                      help="JSON array of executable skill updates")
     p_ll = sub.add_parser("lesson")
     p_ll.add_argument("--mistake", required=True)
     p_ll.add_argument("--why", default="")
@@ -358,8 +400,17 @@ def main(argv: List[str]) -> int:
         path = learner.create_skill(args.name, description=args.description, content=args.content, category=args.category)
         print(f"created: {path}")
     elif args.cmd == "evolve-skill":
-        path = learner.evolve_skill(args.name, improvements=args.improvements)
-        print(f"evolved: {path}")
+        try:
+            code_blocks = json.loads(args.code_blocks or "[]")
+            path = learner.evolve_skill(
+                args.name, improvements=args.improvements,
+                new_code_blocks=code_blocks,
+            )
+            print(f"evolved: {path}")
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"skill evolution refused: {exc}")
+            a.shutdown()
+            return 1
     elif args.cmd == "lesson":
         l = learner.lesson_learned(mistake=args.mistake, why=args.why, fix=args.fix, context=args.context, severity=args.severity)
         print(f"lesson recorded: {l['id']}")

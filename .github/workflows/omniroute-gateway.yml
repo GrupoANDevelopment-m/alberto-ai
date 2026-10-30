@@ -1,0 +1,225 @@
+name: OmniRoute Gateway Validation
+
+on:
+  push:
+    branches: [audit/omniroute-gateway-validation]
+  pull_request:
+    branches: [main, master, audit/integrated-hardening]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: omniroute-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test existing Hermes and MiMo engines with a real model call when credentials exist
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ALBERTO_RUN_LIVE_MODEL_TESTS: ${{ vars.ALBERTO_RUN_LIVE_MODEL_TESTS }}
+        run: |
+          set -u
+          python - <<'PY'
+          import os, sys, tempfile, traceback
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd()))
+          from alberto.sandbox import LocalSandbox
+          from alberto.model_router import ModelConfig, ModelRouter, ModelSpec
+          from alberto.engines.mimo import MiMoEngine
+          from alberto.engines.hermes import HermesEngine
+
+          with tempfile.TemporaryDirectory(prefix="alberto-engine-check-") as home:
+              sandbox = LocalSandbox(base_dir=Path(home))
+              router = ModelRouter(ModelConfig(tasks={}))
+              mimo = MiMoEngine(sandbox, router, mimo_home=Path(home) / ".mimo", auto_build=True)
+              hermes = HermesEngine(sandbox, mimo=mimo, home=Path(home) / ".hermes")
+              try:
+                  mimo.start()
+                  hermes.start()
+                  print("MiMo running:", mimo.is_running())
+                  print("MiMo binary:", mimo.binary or "NOT FOUND (will require configured model router)")
+                  print("Hermes running:", hermes.is_running())
+                  print("Hermes tools discovered:", len(hermes.available_tools()))
+
+                  # Real execution through Hermes' code-execution interface.
+                  execution = hermes.code_execution(
+                      "print('HERMES_REAL_EXECUTION_OK')", timeout=20
+                  )
+                  print("Hermes code execution return code:", execution.get("returncode"))
+                  print("Hermes code execution stdout:", (execution.get("stdout") or "").strip())
+                  if execution.get("returncode") != 0 or "HERMES_REAL_EXECUTION_OK" not in (execution.get("stdout") or ""):
+                      print("FAIL: Hermes code-execution path did not return the expected output.")
+                      sys.exit_code = 1
+                  else:
+                      print("PASS: Hermes executed a real Python task.")
+
+                  run_live = os.environ.get("ALBERTO_RUN_LIVE_MODEL_TESTS", "").strip() == "1"
+                  key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("NVIDIA_API_KEY")
+                  if run_live:
+                      if not key:
+                          raise RuntimeError(
+                              "ALBERTO_RUN_LIVE_MODEL_TESTS=1 but no OPENROUTER_API_KEY or NVIDIA_API_KEY secret is configured"
+                          )
+                      if os.environ.get("OPENROUTER_API_KEY"):
+                          spec = ModelSpec("openrouter", "openrouter/free", "https://openrouter.ai/api", "OPENROUTER_API_KEY")
+                      else:
+                          spec = ModelSpec("nvidia", "nemotron-3.5-lightning-30b-a3b", "https://integrate.api.nvidia.com", "NVIDIA_API_KEY")
+                      router.set_task("code", spec)
+                      print("Attempting real MiMo.invoke -> configured model provider:", spec.provider, spec.model_id)
+                      answer = mimo.invoke("Reply with exactly: MIMO_LIVE_RESPONSE_OK", task="code", max_tokens=40, temperature=0)
+                      print("MiMo model response:", answer[:1000])
+                      if not isinstance(answer, str) or "MIMO_LIVE_RESPONSE_OK" not in answer:
+                          print("FAIL: MiMo returned a response but not the expected marker.")
+                          sys.exit_code = 1
+                      else:
+                          print("PASS: MiMo delivered a real model response.")
+                  else:
+                      print("MODEL_CALL_NOT_RUN: live inference is opt-in; set repository variable ALBERTO_RUN_LIVE_MODEL_TESTS=1 after provider credentials are configured.")
+              except Exception as exc:
+                  print("ENGINE_TEST_ERROR:", type(exc).__name__, str(exc))
+                  traceback.print_exc()
+                  sys.exit_code = 1
+              finally:
+                  hermes.stop()
+                  mimo.stop()
+              raise SystemExit(getattr(sys, "exit_code", 0))
+          PY
+
+      - name: Install OmniRoute, start gateway, and verify health
+        shell: bash
+        env:
+          # Optional live test against a separately configured OmniRoute instance.
+          # A fresh CI install has no saved provider account or endpoint key.
+          OMNIROUTE_BASE_URL: ${{ secrets.OMNIROUTE_BASE_URL }}
+          OMNIROUTE_API_KEY: ${{ secrets.OMNIROUTE_API_KEY }}
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          npm install --global omniroute
+          omniroute --version
+
+          # Keep the server and its health check in the same step. GitHub Actions
+          # steps run in separate shells, so a process started in one step does
+          # not remain available to the next step.
+          omniroute serve --no-open --port 20128 --no-recovery > "$RUNNER_TEMP/omniroute.log" 2>&1 &
+          gateway_pid=$!
+          cleanup() {
+            kill "$gateway_pid" 2>/dev/null || true
+            omniroute stop >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --silent --show-error --fail http://127.0.0.1:20128/healthz > "$RUNNER_TEMP/omniroute-health.txt"; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              echo "OmniRoute process exited before becoming healthy."
+              cat "$RUNNER_TEMP/omniroute.log"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "OmniRoute did not become healthy within 180 seconds."
+            cat "$RUNNER_TEMP/omniroute.log"
+            exit 1
+          fi
+
+          cat "$RUNNER_TEMP/omniroute-health.txt"
+          python - "$RUNNER_TEMP/omniroute-health.txt" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError:
+              payload = raw
+
+          healthy = payload == "ok" or (
+              isinstance(payload, dict) and payload.get("status") == "ok"
+          )
+          if not healthy:
+              raise SystemExit(f"Unexpected OmniRoute health response: {payload!r}")
+          print("PASS: OmniRoute installed, process started, and /healthz is healthy.")
+          PY
+
+          # A fresh local install proves only that the gateway runs. It has no
+          # saved provider account or endpoint key, so never mislabel health as
+          # a live inference test. Test real inference only against an explicitly
+          # configured endpoint supplied through repository Actions secrets.
+          if [ -z "${OMNIROUTE_BASE_URL:-}" ] || [ -z "${OMNIROUTE_API_KEY:-}" ]; then
+            echo "SKIP: local OmniRoute health passed; live inference requires OMNIROUTE_BASE_URL and OMNIROUTE_API_KEY secrets for a configured gateway."
+            exit 0
+          fi
+
+          base_url="${OMNIROUTE_BASE_URL%/}"
+          echo "Probing configured OmniRoute endpoint /v1/models..."
+          models_status=$(curl --silent --show-error --output "$RUNNER_TEMP/omniroute-models.json" --write-out '%{http_code}' --max-time 30 \
+            -H "Authorization: Bearer $OMNIROUTE_API_KEY" \
+            "$base_url/v1/models" || true)
+          echo "GET /v1/models HTTP status: ${models_status:-curl-error}"
+          cat "$RUNNER_TEMP/omniroute-models.json" 2>/dev/null || true
+          echo
+
+          echo "Attempting a real chat completion through the configured OmniRoute endpoint..."
+          chat_status=$(curl --silent --show-error --output "$RUNNER_TEMP/omniroute-chat.json" --write-out '%{http_code}' --max-time 90 \
+            -H "Authorization: Bearer $OMNIROUTE_API_KEY" \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"auto","messages":[{"role":"user","content":"Reply with exactly: OMNIROUTE_LIVE_MODEL_OK"}],"max_tokens":40}' \
+            "$base_url/v1/chat/completions" || true)
+          echo "POST /v1/chat/completions HTTP status: ${chat_status:-curl-error}"
+          cat "$RUNNER_TEMP/omniroute-chat.json" 2>/dev/null || true
+          echo
+
+          python - "$RUNNER_TEMP/omniroute-chat.json" "$chat_status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path, status = sys.argv[1:]
+          raw = Path(path).read_text(encoding="utf-8").strip() if Path(path).exists() else ""
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError:
+              payload = None
+          choices = payload.get("choices", []) if isinstance(payload, dict) else []
+          message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
+          content = message.get("content") if isinstance(message, dict) else None
+          if status != "200" or not isinstance(content, str) or not content.strip():
+              print("FAIL: configured OmniRoute endpoint did not return a real model completion.")
+              print("Check gateway API key, provider configuration, route eligibility, and provider credentials.")
+              raise SystemExit(1)
+          print("PASS: received a non-empty completion from the configured OmniRoute endpoint.")
+          print("Model reported by gateway:", payload.get("model", "not reported"))
+          print("Response content:", content)
+          PY
+
+      - name: Upload gateway logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-gateway-logs
+          path: ${{ runner.temp }}/omniroute.log
+          if-no-files-found: ignore

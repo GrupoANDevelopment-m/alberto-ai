@@ -179,31 +179,31 @@ def run_crew_squad(
 
     # Build tasks from workflow
     tasks = []
-    prev_output = None
     for i, step in enumerate(wf.get("workflow", [])):
         persona_name = step.get("persona", "")
         task_text = step.get("task", "")
         output_to = step.get("output_to", f"step_{i}")
         if persona_name not in agents:
             return {"ok": False, "error": f"persona {persona_name} not in agents"}
-        # Substitute {output} in task text
-        if prev_output and "{" in task_text:
-            try:
-                task_text = task_text.format(**prev_output)
-            except (KeyError, IndexError):
-                pass
-        # Add user prompt
-        full_desc = f"{task_text}\n\nUser request: {user_prompt}"
-        if prev_output:
-            full_desc += f"\n\nPrevious outputs:\n" + "\n".join(
-                f"[{k}]: {str(v)[:500]}" for k, v in prev_output.items()
-            )
+
+        # CrewAI task context is the real data-flow mechanism: each task receives
+        # the preceding task objects, whose outputs CrewAI resolves at kickoff.
+        # The old prev_output variable was never assigned, so placeholder
+        # substitution and explicit prior-output handoff silently never happened.
+        full_desc = (
+            f"{task_text}\n\nUser request: {user_prompt}\n\n"
+            "Use the outputs from the preceding workflow tasks as context. "
+            "Do not assume a prior step succeeded if its output says otherwise."
+        )
+        task_kwargs = {
+            "description": full_desc,
+            "expected_output": f"Result for step '{output_to}'",
+            "agent": agents[persona_name],
+        }
+        if tasks:
+            task_kwargs["context"] = list(tasks)
         try:
-            task = _Task(
-                description=full_desc,
-                expected_output=f"Result for step '{output_to}'",
-                agent=agents[persona_name],
-            )
+            task = _Task(**task_kwargs)
             tasks.append(task)
         except Exception as e:
             return {"ok": False, "error": f"failed to create task: {e}"}

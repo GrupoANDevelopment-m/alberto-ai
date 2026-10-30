@@ -67,34 +67,60 @@ class SkillManager:
         self._load_stats()
 
     def _load_all(self) -> None:
+        self.refresh()
+
+    def refresh(self) -> int:
+        """Refresh discovered skills while preserving statistics for skills still present.
+
+        Skills created by Learner after Alberto starts must become discoverable
+        immediately; a startup-only index otherwise makes newly-created skills
+        invisible until the next process restart.
+        """
         from alberto.upstream_bridge import list_upstream_skills
-        for s in list_upstream_skills():
-            self.index[s["name"]] = {
-                "name": s["name"],
-                "description": s.get("description", ""),
-                "category": s.get("category", ""),
-                "tags": s.get("tags", []),
-                "path": s.get("path", ""),
-                "version": s.get("version", "0.0.0"),
+        previous = getattr(self, "index", {})
+        refreshed = {}
+        for skill in list_upstream_skills():
+            name = skill["name"]
+            old_stats = previous.get(name, {}).get("stats", {})
+            refreshed[name] = {
+                "name": name,
+                "description": skill.get("description", ""),
+                "category": skill.get("category", ""),
+                "tags": skill.get("tags", []),
+                "path": skill.get("path", ""),
+                "version": skill.get("version", "0.0.0"),
+                "executable": bool(skill.get("executable", True)),
                 "stats": {
-                    "success": 0, "fail": 0,
-                    "total_time": 0.0, "last_used": None,
-                }
+                    "success": int(old_stats.get("success", 0)),
+                    "fail": int(old_stats.get("fail", 0)),
+                    "total_time": float(old_stats.get("total_time", 0.0)),
+                    "last_used": old_stats.get("last_used"),
+                },
+                "available": True,
             }
+        self.index = refreshed
+        return len(refreshed)
 
     def _load_stats(self) -> None:
         if self._stats_path.exists():
             try:
                 stats = json.loads(self._stats_path.read_text())
                 for name, s in stats.items():
-                    if name in self.index:
+                    if name in self.index and isinstance(s, dict):
                         self.index[name]["stats"].update(s)
-                    else:
-                        # Auto-register dynamic skill from stats
+                    elif isinstance(s, dict):
+                        # Keep historical metrics for removed/ephemeral skills,
+                        # but mark them unavailable so they cannot be selected or run.
                         self.index[name] = {
-                            "name": name, "description": "(dynamic)",
-                            "category": "dynamic", "tags": [], "path": "",
-                            "version": "0.0.0", "stats": dict(s),
+                            "name": name, "description": "(statistics only)",
+                            "category": "historical", "tags": [], "path": "",
+                            "version": "0.0.0", "available": False,
+                            "stats": {
+                                "success": int(s.get("success", 0)),
+                                "fail": int(s.get("fail", 0)),
+                                "total_time": float(s.get("total_time", 0.0)),
+                                "last_used": s.get("last_used"),
+                            },
                         }
             except Exception:
                 pass
@@ -107,10 +133,14 @@ class SkillManager:
         self._stats_path.write_text(json.dumps(data, indent=2))
 
     def total(self) -> int:
-        return len(self.index)
+        """Count discovered executable skills, excluding statistics-only history."""
+        return sum(1 for skill in self.index.values() if skill.get("available", bool(skill.get("path"))))
 
     def list_skills(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        skills = list(self.index.values())
+        skills = [
+            skill for skill in self.index.values()
+            if skill.get("available", bool(skill.get("path")))
+        ]
         if category:
             skills = [s for s in skills if s["category"] == category]
         return skills
@@ -124,6 +154,8 @@ class SkillManager:
         q_words = set(re.findall(r"\w+", query.lower()))
         scored = []
         for s in self.index.values():
+            if not s.get("available", bool(s.get("path"))):
+                continue
             text = (s["name"] + " " + s["description"] + " " +
                     " ".join(s["tags"]) + " " + s["category"]).lower()
             score = sum(1 for w in q_words if w in text) / max(len(q_words), 1)
@@ -159,7 +191,7 @@ class SkillManager:
             self.index[skill_name] = {
                 "name": skill_name, "description": "(auto-registered)",
                 "category": "dynamic", "tags": [], "path": "",
-                "version": "0.0.0",
+                "version": "0.0.0", "available": False,
                 "stats": {"success": 0, "fail": 0, "total_time": 0.0, "last_used": None}
             }
         stats = self.index[skill_name]["stats"]
@@ -277,13 +309,16 @@ class MetaController:
         skill first. The lexical gate prevents that fallback and lets execution
         block safely when no relevant capability is available.
         """
-        relevant = self.skill_manager.search(task, limit=5, min_score=0.1)
+        relevant = [
+            item for item in self.skill_manager.search(task, limit=10, min_score=0.1)
+            if isinstance(item, dict)
+            and isinstance(item.get("skill"), dict)
+            and item["skill"].get("executable", True)
+        ]
         if not relevant:
             return None
         relevant_names = {
-            item.get("skill", {}).get("name")
-            for item in relevant
-            if isinstance(item, dict) and isinstance(item.get("skill"), dict)
+            item["skill"].get("name") for item in relevant
         }
         recs = self.skill_manager.recommend(task, top=5)
         for item in recs:
@@ -353,6 +388,18 @@ class MetaController:
         # Failure path: research, learn, evolve, create new skill
         self.skill_manager.record_outcome(st.skill, success=False,
                                           duration=time.time() - st.started_at)
+        # Snapshot user-owned skill content for rollback if an evolved patch fails.
+        original_skill_path = None
+        original_skill_content = None
+        try:
+            from alberto.runtime.skill_engine import find_skill
+            candidate_path = find_skill(st.skill)
+            if candidate_path is not None:
+                candidate_path.resolve().relative_to(self.learner.user_skills_dir.resolve())
+                original_skill_path = candidate_path
+                original_skill_content = candidate_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
         # Detect obstacle
         obstacle = self._detect_obstacle(st)
         if obstacle:
@@ -372,6 +419,8 @@ class MetaController:
             evolved = self._try_evolve_skill(st.skill, error, obstacle)
             if evolved:
                 # Retry with evolved skill
+                self.skill_manager.refresh()
+                self.skill_manager._save_stats()
                 self._emit("skill_evolved", {"name": st.skill, "path": str(evolved)})
                 success2, output2, _ = self._try_skill(st, skill_override=st.skill)
                 if success2:
@@ -384,12 +433,20 @@ class MetaController:
                     )
                     self._emit("subtask_recovered", {"id": st.id})
                     return
+                # Failed patch: restore original skill and refresh the catalog.
+                if original_skill_path is not None and original_skill_content is not None:
+                    original_skill_path.write_text(original_skill_content, encoding="utf-8")
+                    self.skill_manager.refresh()
+                    self.skill_manager._save_stats()
+                    self._emit("skill_evolution_rolled_back", {"name": st.skill})
             # 4. Create new skill if obstacle is novel
             if research.get("total_hits", 0) == 0:
                 new_skill = self.learner.overcome_obstacle(
                     obstacle, tried=[st.skill], workaround=f"see research cache"
                 )
                 if new_skill:
+                    self.skill_manager.refresh()
+                    self.skill_manager._save_stats()
                     self._emit("skill_created", {"path": str(new_skill)})
         # Final status
         st.status = "failed" if st.attempts >= st.max_attempts else "blocked"
@@ -431,13 +488,48 @@ class MetaController:
         return True, result.get("stdout", ""), ""
 
     def _try_evolve_skill(self, name: str, error: str, obstacle: str):
-        """Evolve a skill after failure."""
+        """Ask MiMo for a concrete patch; prose-only changes are rejected."""
         try:
+            from alberto.runtime.skill_engine import find_skill
+            path = find_skill(name)
+            if path is None:
+                return None
+            path.resolve().relative_to(self.learner.user_skills_dir.resolve())
+            source = path.read_text(encoding="utf-8", errors="replace")
+            prompt = (
+                "Propose a small, testable patch to this Alberto skill. Return JSON only "
+                "with 'improvements' (string) and 'code_blocks' (non-empty list of "
+                "{lang, code}); lang must be bash or python. Replace the primary "
+                "executable block with a corrected version. Do not add network access, "
+                "privilege escalation, destructive actions, or sandbox-policy bypasses. "
+                "If no safe improvement is possible, return an empty code_blocks list.\n\n"
+                + "Failure obstacle: " + str(obstacle)[:500]
+                + "\nError: " + str(error)[:1000]
+                + "\nCurrent SKILL.md (truncated):\n" + source[:8000]
+            )
+            raw = self.alberto.mimo.invoke(
+                prompt, task="code", max_tokens=1800, temperature=0.1
+            )
+            if not isinstance(raw, str):
+                return None
+            candidate = raw.strip()
+            fence = chr(96) * 3
+            if candidate.startswith(fence):
+                pattern = r"^" + re.escape(fence) + r"(?:json)?\s*|\s*" + re.escape(fence) + r"$"
+                candidate = re.sub(pattern, "", candidate, flags=re.I).strip()
+            proposal = json.loads(candidate)
+            improvements = proposal.get("improvements")
+            code_blocks = proposal.get("code_blocks")
+            if not isinstance(improvements, str) or not improvements.strip():
+                return None
+            if not isinstance(code_blocks, list) or not code_blocks:
+                return None
             return self.learner.evolve_skill(
-                name,
-                improvements=f"Auto-evolved after failure: {obstacle}\nError: {error}\nAdded: better error handling",
+                name, improvements=improvements, new_code_blocks=code_blocks
             )
         except Exception:
+            # Missing credentials, malformed output, or policy validation must
+            # not mutate the skill or interrupt the user's task.
             return None
 
     def _detect_obstacle(self, st: SubTask) -> Optional[str]:

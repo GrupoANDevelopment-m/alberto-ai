@@ -129,6 +129,7 @@ class Alberto:
         return identity.get_banner()
 
     def status(self) -> Dict:
+        from .runtime.crewai_runtime import get_crewai_status
         return {
             "name": self.name,
             "version": self.version,
@@ -149,6 +150,17 @@ class Alberto:
             "active_squad": self.catalog.active_squad,
             "models": self.router.list_tasks(),
             "upstream": get_upstream_summary(),
+            "coordination": {
+                "squad_engine": os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower(),
+                "crewai": get_crewai_status(),
+                "hermes_tool_dispatch": True,
+                "mimo_model_fallback": True,
+            },
+            "learning": {
+                "profile_interactions": int(self.learner.profile.get("interactions", 0)),
+                "stored_lessons": len(self.learner.lessons),
+                "skills_discovered": self.skill_manager.total(),
+            },
         }
 
     # ===== Chat (natural conversation) =====
@@ -309,6 +321,21 @@ class Alberto:
 
             # Prepend Hermes/AIOX/NemoClaw context to system prompt
             integration_ctx = self._build_integration_context()
+            # Learner observations are persisted after each turn; these hints
+            # feed back into later turns so profile learning affects behavior.
+            try:
+                adaptation_hints = self.learner.get_adaptation_hints()
+                if adaptation_hints:
+                    adaptation_block = (
+                        "## Learned response preferences (user profile)\n"
+                        + json.dumps(adaptation_hints, ensure_ascii=False)
+                    )
+                    integration_ctx = (
+                        f"{integration_ctx}\n\n{adaptation_block}"
+                        if integration_ctx else adaptation_block
+                    )
+            except Exception:
+                pass
             if integration_ctx:
                 # Insert before the last user message
                 messages_with_ctx = messages[:-1] + [
@@ -328,7 +355,9 @@ class Alberto:
 
             if strat.mode == "squad" and strat.squad:
                 # Squad mode: run the pipeline, but also include the LLM-generated summary as natural response
-                squad_result = self.run_squad(strat.squad, prompt)
+                squad_result = self.run_squad(
+                    strat.squad, prompt, context_messages=messages
+                )
                 squad_text = self._format_squad_result(squad_result)
                 response_text = squad_text
             elif strat.mode == "speculative":
@@ -435,6 +464,12 @@ class Alberto:
 
         conv.add("assistant", response_text)
         self.conversations.save(conv)
+        # Persist interaction-level learning. This is profile adaptation, not
+        # model-weight training; isolate failures so storage cannot break chat.
+        try:
+            self.learner.observe_interaction(prompt, response_text)
+        except Exception:
+            pass
 
         return {
             "response": response_text,
@@ -447,6 +482,11 @@ class Alberto:
         }
 
     def _format_squad_result(self, result: Dict) -> str:
+        if not result.get("ok", True) or result.get("error"):
+            engine = result.get("engine", "alberto")
+            squad = result.get("squad", "unknown")
+            error = str(result.get("error") or "squad execution failed")
+            return f"⚠️ Squad `{squad}` falhou no motor `{engine}`: {error[:1500]}"
         lines = [f"⚡ Squad `{result.get('squad', '?')}` executou:\n"]
         for k, v in result.get("outputs", {}).items():
             if v is None:
@@ -463,10 +503,69 @@ class Alberto:
         return winner.get("content", "[max mode: no winner]")
 
     # ===== Squad execution =====
-    def run_squad(self, squad_name: str, prompt: str) -> Dict:
+    def run_squad(
+        self, squad_name: str, prompt: str, *,
+        context_messages: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict:
+        """Coordinate a squad while preserving the active conversation context.
+
+        Alberto remains the entry point and decision-maker. CrewAI is an optional
+        execution backend for a squad, not a coordinator of Alberto, Hermes, or MiMo.
+        """
         squad = self.catalog.get(squad_name)
         if squad is None:
             return {"error": f"unknown squad: {squad_name}"}
+
+        # Squad execution used to receive only the latest user message, dropping
+        # the conversation context already assembled by Alberto. Preserve recent
+        # turns and system context across the delegation boundary, within a bound.
+        if context_messages:
+            context_parts = []
+            for message in context_messages:
+                role = str(message.get("role", "user"))
+                content = str(message.get("content", ""))
+                if role == "user" and content.strip() == prompt.strip():
+                    continue
+                if content.strip():
+                    context_parts.append(f"[{role}] {content[:1200]}")
+            context_text = "\n\n".join(context_parts[-12:])[:8000]
+            if context_text:
+                prompt = (
+                    "ALBERTO CONVERSATION CONTEXT (preserve relevant constraints and prior decisions):\n"
+                    f"{context_text}\n\nCURRENT USER REQUEST:\n{prompt}"
+                )
+
+        squad_engine = os.environ.get("ALBERTO_SQUAD_ENGINE", "alberto").strip().lower()
+        if squad_engine == "crewai":
+            from alberto.runtime.crewai_runtime import run_crew_squad
+            base = Path(__file__).parent.parent
+            workflow_path = base / "workflows" / f"{squad_name}.yaml"
+            if not workflow_path.is_file():
+                workflow_path = base / "workflows" / f"{squad_name}.yml"
+            if not workflow_path.is_file():
+                return {
+                    "error": f"CrewAI was selected, but no workflow YAML exists for squad '{squad_name}'",
+                    "engine": "crewai",
+                    "ok": False,
+                }
+            try:
+                spec = self.router.config.resolve("chat")
+            except Exception as exc:
+                return {"ok": False, "engine": "crewai", "error": f"model route unavailable: {exc}"}
+            if spec is None:
+                return {"ok": False, "engine": "crewai", "error": "no model configured for task 'chat'"}
+            result = run_crew_squad(
+                squad_name=squad_name,
+                workflow_yaml_path=str(workflow_path),
+                personas_dir=str(base / "personas"),
+                llm_model=spec.model_id,
+                llm_base_url=spec.base_url,
+                llm_api_key=os.environ.get(spec.credential_env),
+                user_prompt=prompt,
+            )
+            result.setdefault("engine", "crewai")
+            return result
+
         outputs: Dict[str, Optional[str]] = {}
         for step in squad.workflow:
             persona = squad.personas.get(step.persona) or self.personas.get(step.persona)
