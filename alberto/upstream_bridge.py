@@ -136,7 +136,7 @@ def list_upstream_skills() -> List[Dict[str, str]]:
                 # can actually execute through skill_engine.run_skill().
                 import re
                 executable = bool(re.search(
-                    r"```(?:bash|sh|shell|python|python3|py)\\s*\\n",
+                    r"```(?:bash|sh|shell|python|python3|py)\s*\n",
                     content, re.I,
                 ))
                 skills.append({
