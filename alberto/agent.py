@@ -482,6 +482,11 @@ class Alberto:
         }
 
     def _format_squad_result(self, result: Dict) -> str:
+        if not result.get("ok", True) or result.get("error"):
+            engine = result.get("engine", "alberto")
+            squad = result.get("squad", "unknown")
+            error = str(result.get("error") or "squad execution failed")
+            return f"⚠️ Squad `{squad}` falhou no motor `{engine}`: {error[:1500]}"
         lines = [f"⚡ Squad `{result.get('squad', '?')}` executou:\n"]
         for k, v in result.get("outputs", {}).items():
             if v is None:
