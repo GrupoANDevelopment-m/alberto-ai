@@ -337,3 +337,18 @@ def test_skill_discovery_marks_executable_and_guidance_only_skills_correctly(tmp
     discovered = {item["name"]: item for item in upstream_bridge.list_upstream_skills()}
     assert discovered["runnable"]["executable"] is True
     assert discovered["guidance"]["executable"] is False
+
+
+def test_failed_crewai_squad_is_reported_as_failure_not_success():
+    from alberto.agent import Alberto
+
+    agent = Alberto.__new__(Alberto)
+    message = agent._format_squad_result({
+        "ok": False,
+        "engine": "crewai",
+        "error": "no API key configured",
+    })
+    assert "falhou" in message
+    assert "crewai" in message
+    assert "no API key configured" in message
+    assert "executou" not in message
