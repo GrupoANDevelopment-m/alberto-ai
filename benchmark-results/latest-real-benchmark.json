@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-11-02T13:28:50.506755+00:00",
+  "finished_at": "2026-11-02T13:31:15.383215+00:00",
+  "agent_version": "1.0.0",
+  "sandbox_type": "LocalSandbox",
+  "sandbox_isolation_level": "host-process",
+  "configured_model_tasks": [
+    "chat",
+    "code",
+    "embed",
+    "reasoning",
+    "summary",
+    "vision"
+  ],
+  "suite": "alberto-real-quality-latency-v1",
+  "repeats": 1,
+  "metrics": {
+    "cases": 10,
+    "passed": 10,
+    "pass_rate": 1.0,
+    "errors": 0,
+    "error_rate": 0.0,
+    "mean_latency_ms": 13477.0,
+    "median_latency_ms": 13096.08,
+    "p95_latency_ms": 16590.11
+  },
+  "metrics_by_category": {
+    "arithmetic": {
+      "cases": 2,
+      "passed": 2,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 14676.66,
+      "median_latency_ms": 14676.66,
+      "p95_latency_ms": 16590.11
+    },
+    "classification_pt": {
+      "cases": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 13785.38,
+      "median_latency_ms": 13785.38,
+      "p95_latency_ms": 13785.38
+    },
+    "instruction_following": {
+      "cases": 3,
+      "passed": 3,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 12604.06,
+      "median_latency_ms": 12439.23,
+      "p95_latency_ms": 13254.61
+    },
+    "language": {
+      "cases": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 13385.66,
+      "median_latency_ms": 13385.66,
+      "p95_latency_ms": 13385.66
+    },
+    "multilingual": {
+      "cases": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 12937.56,
+      "median_latency_ms": 12937.56,
+      "p95_latency_ms": 12937.56
+    },
+    "reasoning": {
+      "cases": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 14605.64,
+      "median_latency_ms": 14605.64,
+      "p95_latency_ms": 14605.64
+    },
+    "structured_output": {
+      "cases": 1,
+      "passed": 1,
+      "pass_rate": 1.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "mean_latency_ms": 12890.27,
+      "median_latency_ms": 12890.27,
+      "p95_latency_ms": 12890.27
+    }
+  },
+  "results": [
+    {
+      "task_id": "instruction_token",
+      "category": "instruction_following",
+      "repeat": 1,
+      "prompt": "Responda exclusivamente com o token READY, sem aspas nem pontuação.",
+      "passed": true,
+      "model_used": true,
+      "response": "READY",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 12118.34,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "arithmetic_17x6_minus19",
+      "category": "arithmetic",
+      "repeat": 1,
+      "prompt": "Calcule (17 * 6) - 19. Responda apenas com o número inteiro.",
+      "passed": true,
+      "model_used": true,
+      "response": "83",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 12763.2,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "json_status_count",
+      "category": "structured_output",
+      "repeat": 1,
+      "prompt": "Responda somente com JSON válido, sem markdown, com status igual a ok e count igual a 3.",
+      "passed": true,
+      "model_used": true,
+      "response": "{\"status\": \"ok\", \"count\": 3}",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 12890.27,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "exact_three_lines",
+      "category": "instruction_following",
+      "repeat": 1,
+      "prompt": "Escreva exatamente estas três linhas, sem texto adicional:\nITEM-1\nITEM-2\nITEM-3",
+      "passed": true,
+      "model_used": true,
+      "response": "ITEM-1\nITEM-2\nITEM-3",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 12439.23,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "sentiment_portuguese",
+      "category": "classification_pt",
+      "repeat": 1,
+      "prompt": "Classifique a frase usando apenas uma palavra: POSITIVO, NEGATIVO ou NEUTRO. Frase: A equipa concluiu o projeto antes do prazo e o cliente elogiou o resultado.",
+      "passed": true,
+      "model_used": true,
+      "response": "POSITIVO",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 13785.38,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "inventory_arithmetic",
+      "category": "arithmetic",
+      "repeat": 1,
+      "prompt": "Uma equipa tem 4 caixas com 7 peças cada, perde 5 peças e recebe mais 9. Responda apenas com o total inteiro.",
+      "passed": true,
+      "model_used": true,
+      "response": "32",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 16590.11,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "word_count_angola",
+      "category": "language",
+      "repeat": 1,
+      "prompt": "Quantas letras tem a palavra Angola? Responda apenas com o número.",
+      "passed": true,
+      "model_used": true,
+      "response": "6",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 13385.66,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "sort_numbers",
+      "category": "instruction_following",
+      "repeat": 1,
+      "prompt": "Ordene os números 9, 2, 5 em ordem crescente. Responda apenas no formato 2,5,9.",
+      "passed": true,
+      "model_used": true,
+      "response": "2,5,9",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 13254.61,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "english_token",
+      "category": "multilingual",
+      "repeat": 1,
+      "prompt": "Reply with exactly this uppercase word and no punctuation: ACCEPTED",
+      "passed": true,
+      "model_used": true,
+      "response": "ACCEPTED",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 12937.56,
+      "tool_call_count": 0,
+      "error": null
+    },
+    {
+      "task_id": "logical_condition",
+      "category": "reasoning",
+      "repeat": 1,
+      "prompt": "If all A are B and no B are C, can any A be C? Answer only YES or NO.",
+      "passed": true,
+      "model_used": true,
+      "response": "NO",
+      "strategy": "{'mode': 'solo', 'engine': 'mimo', 'squad': None, 'task_routing': 'code', 'reason': 'default single-engine'}",
+      "latency_ms": 14605.64,
+      "tool_call_count": 0,
+      "error": null
+    }
+  ],
+  "notes": [
+    "Responses are live outputs from Alberto.chat; no mock model responses are used.",
+    "Scores are deterministic checks for instruction following, simple reasoning, and structured output.",
+    "Token counts and cost are omitted because the current chat interface does not expose reliable usage metadata.",
+    "Host-process sandbox modes do not provide OS-level isolation."
+  ]
+}
