@@ -51,3 +51,6 @@ coverage.xml
 .skills/cache/
 # Virtualenv (local deps)
 .venv/
+
+# Benchmark raw output (only latest-real-benchmark.json is tracked)
+benchmark-results/alberto-real-*.json
