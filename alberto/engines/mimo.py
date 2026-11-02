@@ -74,6 +74,22 @@ class MiMoEngine:
         if auto_build and not self._binary:
             self._try_build_binary()
 
+    @staticmethod
+    def _extract_text(resp: Dict) -> str:
+        """Extract assistant text, handling reasoning models (content may be null)."""
+        try:
+            msg = resp["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        text = msg.get("content")
+        if text is None or (isinstance(text, str) and not text.strip()):
+            for alt in ("reasoning_content", "reasoning", "text"):
+                val = msg.get(alt)
+                if val and str(val).strip():
+                    return str(val)
+            return ""
+        return text
+
     def _find_binary(self) -> Optional[str]:
         for path in [
             shutil.which("mimo"),
@@ -247,7 +263,7 @@ class MiMoEngine:
             resp = self._router.invoke("reasoning", [
                 {"role": "user", "content": prompt},
             ], max_tokens=300, temperature=0.0)
-            text = resp["choices"][0]["message"]["content"]
+            text = self._extract_text(resp)
             try:
                 return json.loads(text)
             except Exception:
@@ -266,7 +282,7 @@ class MiMoEngine:
             for f in futures:
                 try:
                     resp = f.result()
-                    candidates.append(resp["choices"][0]["message"]["content"])
+                    candidates.append(self._extract_text(resp))
                 except Exception as e:
                     candidates.append(f"[error] {e}")
         scored = []
@@ -287,7 +303,7 @@ class MiMoEngine:
                 resp = self._router.invoke("code", [
                     {"role": "user", "content": prompt},
                 ], max_tokens=2048, temperature=0.3)
-                prev = resp["choices"][0]["message"]["content"]
+                prev = self._extract_text(resp)
                 results[step] = {"content": prev, "verdict": self.judge(prev)}
             except Exception as e:
                 results[step] = {"content": f"[error] {e}", "verdict": {"verdict": "fail"}}
@@ -303,7 +319,7 @@ class MiMoEngine:
             for f in futures:
                 try:
                     resp = f.result()
-                    out.append({"ok": True, "content": resp["choices"][0]["message"]["content"]})
+                    out.append({"ok": True, "content": self._extract_text(resp)})
                 except Exception as e:
                     out.append({"ok": False, "error": str(e)})
             return out
@@ -323,7 +339,7 @@ class MiMoEngine:
             resp = self._router.invoke("reasoning", [
                 {"role": "user", "content": prompt},
             ], max_tokens=2048, temperature=0.2)
-            text = resp["choices"][0]["message"]["content"]
+            text = self._extract_text(resp)
             self.memory_set("__distilled__", text, tags="distilled")
             return text
         except Exception as e:
@@ -405,4 +421,4 @@ class MiMoEngine:
         resp = self._router.invoke(task, [{"role": "user", "content": prompt}],
                                    max_tokens=kwargs.get("max_tokens", 2048),
                                    temperature=kwargs.get("temperature", 0.5))
-        return resp["choices"][0]["message"]["content"]
+        return self._extract_text(resp)

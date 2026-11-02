@@ -324,7 +324,7 @@ class Alberto:
                     # Fallback or no-FC model: plain chat, Mavis will handle Execute: lines
                     resp = self.router.invoke(strat.task_routing, messages,
                                               max_tokens=2048, temperature=0.7)
-                    response_text = resp["choices"][0]["message"]["content"]
+                    response_text = self.router.extract_text(resp)
                     if on_fallback:
                         response_text = f"⚠️ MAVIS FALLBACK MODE (gemma4)\n\n{response_text}"
         except Exception as e:
@@ -439,7 +439,9 @@ class Alberto:
                     choices = resp.get("choices") or []
                     if choices and isinstance(choices, list):
                         msg = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
-                        content = msg.get("content") or f"[step {step.persona}: no content in response]"
+                        content = (msg.get("content")
+                                   or msg.get("reasoning_content")
+                                   or f"[step {step.persona}: no content in response]")
                     else:
                         content = f"[step {step.persona}: no choices in response]"
                 else:
@@ -477,6 +479,28 @@ class Alberto:
             base_url=base_url, credential_env=credential_env,
             options=options or {},
         ))
+        self._save_config()
+
+    def model_add_fallback(self, *, provider: str, model_id: str,
+                           base_url: str, credential_env: str,
+                           options: Optional[Dict] = None) -> None:
+        """Add a model to the global fallback chain (used when primary fails)."""
+        from .model_router import ModelSpec
+        self.router.add_fallback(ModelSpec(
+            provider=provider, model_id=model_id,
+            base_url=base_url, credential_env=credential_env,
+            options=options or {},
+        ))
+        self._save_config()
+
+    def model_remove_fallback(self, index: int) -> bool:
+        """Remove a fallback by 0-based index. Returns False if out of range."""
+        chain = self.router.config.fallback_chain
+        if index < 0 or index >= len(chain):
+            return False
+        chain.pop(index)
+        self._save_config()
+        return True
 
     def model_test(self, task: str) -> Dict[str, str]:
         return self.router.render_env(task)

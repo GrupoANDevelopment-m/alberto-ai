@@ -109,6 +109,48 @@ def cmd_model(args, alberto: Alberto) -> int:
             credential_env=args.cred_env,
         )
         print(f"ok: {args.task} -> {args.provider}/{args.model_id}")
+    elif args.action == "add-fallback":
+        # alberto model add-fallback <provider> <model_id> <base_url> <cred_env> [key=value ...]
+        a = args.args
+        if len(a) < 4:
+            print("usage: alberto model add-fallback <provider> <model_id> <base_url> <cred_env> [k=v ...]")
+            return 1
+        provider, model_id, base_url, cred_env = a[0], a[1], a[2], a[3]
+        options = {}
+        for kv in a[4:]:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                try:
+                    v = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                options[k] = v
+        alberto.model_add_fallback(
+            provider=provider, model_id=model_id,
+            base_url=base_url, credential_env=cred_env, options=options,
+        )
+        print(f"ok: fallback -> {provider}/{model_id}")
+    elif args.action == "fallbacks":
+        chain = alberto.router.config.fallback_chain
+        if not chain:
+            print("(no fallback chain configured)")
+        for i, spec in enumerate(chain, 1):
+            print(f"{i}. {spec.provider}/{spec.model_id} @ {spec.base_url} (env={spec.credential_env})")
+    elif args.action == "rm-fallback":
+        a = args.args
+        if not a:
+            print("usage: alberto model rm-fallback <index>")
+            return 1
+        try:
+            idx = int(a[0]) - 1
+        except ValueError:
+            print("index must be a number")
+            return 1
+        if alberto.model_remove_fallback(idx):
+            print(f"ok: removed fallback #{idx+1}")
+        else:
+            print("invalid index")
+            return 1
     elif args.action == "test":
         env = alberto.model_test(args.task)
         if not env:
@@ -667,7 +709,7 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("args", nargs="*")
 
     p = sub.add_parser("model", help="model config")
-    p.add_argument("action", choices=["list", "set", "test"])
+    p.add_argument("action", choices=["list", "set", "test", "add-fallback", "fallbacks", "rm-fallback"])
     p.add_argument("args", nargs="*")
 
     p = sub.add_parser("squad", help="squad ops")

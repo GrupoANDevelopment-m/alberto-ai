@@ -37,6 +37,7 @@ from ..upstream_bridge import (
     import_hermes_tool, hermes_tools_path, hermes_skills_path,
     list_upstream_tools, list_upstream_skills,
 )
+from ..response_utils import _extract_choice_text
 
 
 # Tool definition: (name, engine, description, params, fn)
@@ -280,7 +281,7 @@ def tool_vision(alberto, args):
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
-        text = data["choices"][0]["message"]["content"]
+        text = _extract_choice_text(data)
         return {"ok": True, "result": text, "engine": "router-vision"}
     except Exception as e:
         return {"ok": False, "error": f"vision fallback: {e}"}
@@ -988,7 +989,7 @@ def _gh_review(alberto, args):
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
-        review = data["choices"][0]["message"]["content"]
+        review = _extract_choice_text(data)
         return {"ok": True, "review": review, "diff_size": len(diff)}
     except Exception as e:
         return {"ok": False, "error": str(e), "diff_size": len(diff)}
@@ -1244,7 +1245,7 @@ def _openrouter(alberto, args):
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
-        return {"ok": True, "result": data["choices"][0]["message"]["content"]}
+        return {"ok": True, "result": _extract_choice_text(data)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

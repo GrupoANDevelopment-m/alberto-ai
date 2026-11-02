@@ -125,6 +125,31 @@ class ModelRouter:
         payload.update(spec.options)
         return payload
 
+    @staticmethod
+    def extract_text(resp: Dict[str, Any]) -> str:
+        """Extract assistant text from an OpenAI-compat response.
+
+        Handles reasoning models (Nemotron, DeepSeek-R1, QwQ, etc.) that may
+        return ``content: null`` and put the payload in ``reasoning_content``.
+        """
+        try:
+            msg = resp["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        text = msg.get("content")
+        if text is None or (isinstance(text, str) and not text.strip()):
+            # Reasoning model: content empty, reasoning carries the output
+            reasoning = msg.get("reasoning_content")
+            if reasoning and str(reasoning).strip():
+                return str(reasoning)
+            # Some providers use "reasoning" or nest under "text"
+            for alt in ("reasoning", "text"):
+                val = msg.get(alt)
+                if val and str(val).strip():
+                    return str(val)
+            return ""
+        return text
+
     def _build_request(self, spec: ModelSpec, payload: Dict[str, Any]) -> urllib.request.Request:
         # Strip trailing /v1 to avoid doubling up
         base = spec.base_url.rstrip("/")

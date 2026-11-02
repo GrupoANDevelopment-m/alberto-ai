@@ -49,3 +49,5 @@ coverage.xml
 
 # Skills cache
 .skills/cache/
+# Virtualenv (local deps)
+.venv/
