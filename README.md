@@ -311,4 +311,4 @@ Built by [@GrupoANDevelopment-m](https://github.com/GrupoANDevelopment-m) using 
 
 ## Local installation and readiness
 
-See [INSTALL-LOCAL.md](INSTALL-LOCAL.md) for the supported installation path, NVIDIA configuration, persistent sandbox location, and the read-only diagnostic that counts the local and Hermes skill catalogs. The repository snapshot currently contains 775 local skill definitions plus 100 Hermes upstream skill definitions; the runtime diagnostic reports the actually discoverable count on the installed machine.
+See [INSTALL-LOCAL.md](INSTALL-LOCAL.md) for the supported installation path, NVIDIA configuration, persistent sandbox location, and the read-only diagnostic that counts the local and Hermes skill catalogs. The repository snapshot currently contains 775 local skill definitions plus 72 Hermes upstream skill definitions; the runtime diagnostic reports the actually discoverable count on the installed machine.
