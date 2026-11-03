@@ -89,23 +89,8 @@ class AlbertoApp {
     } catch (e) {
       $('#status-dot').classList.add('error');
       $('#status-text').textContent = 'offline (mock)';
-      this.toast('Backend offline — usando dados mock pra preview', 'info');
-      this.applyStatus(this.mockStatus());
+      this.toast('Backend offline — chat e estado indisponíveis até o servidor iniciar.', 'error');
     }
-  }
-
-  mockStatus() {
-    return {
-      name: 'Alberto AI',
-      version: '1.0.0',
-      sandbox: 'LocalSandbox',
-      mimo: { running: true, memory_keys: 0 },
-      hermes: { running: false },
-      shortcuts: 0,
-      squads: ['engineering', 'research', 'product', 'incident', 'data-ml', 'growth', 'finance', 'support'],
-      active_squad: null,
-      models: [],
-    };
   }
 
   applyStatus(status) {
@@ -232,30 +217,6 @@ class AlbertoApp {
     if (text.toLowerCase().includes('memory')) {
       this.loadMemory();
     }
-  }
-
-  mockResponse(text, strategy) {
-    if (text.startsWith('/aiox-squad activate')) {
-      const name = text.split(' ').pop();
-      this.activeSquad = name;
-      this.updateSquadPanel();
-      return `Squad **${name}** ativado. Próximos comandos serão roteados por ele.`;
-    }
-    if (text.startsWith('/hermes browser')) {
-      return `🌐 Buscando ${text.split(' ').slice(2).join(' ')}... (em produção, abriria Hermes browser)`;
-    }
-    if (text.startsWith('/s ')) {
-      const parts = text.split(' ');
-      const key = parts[1];
-      const expansion = parts.slice(2).join(' ');
-      this.shortcuts[key] = { expansion, use_count: 0 };
-      this.renderShortcuts();
-      return `Atalho **${key}** → \`${expansion}\``;
-    }
-    if (text.startsWith('/strategy')) {
-      return JSON.stringify(strategy, null, 2);
-    }
-    return `Recebi: "${text}"\n\nEstratégia: ${strategy.mode} | engine=${strategy.engine} | task=${strategy.task_routing}\n\n(Em produção, isto viria do LLM via streaming.)`;
   }
 
   appendMessage(role, content, strategy = null) {
