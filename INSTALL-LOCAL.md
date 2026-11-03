@@ -61,13 +61,13 @@ O ficheiro de configuração dos modelos fica em:
 ~/.local/share/alberto-ai/sandbox/home/.mimo/model_config.json
 ```
 
-Para manter a localização antiga ou escolher outra, define `ALBERTO_SANDBOX_DIR` antes de iniciar o Alberto. Exemplo:
+Para manter a localização anterior já usada no teu ambiente (`/workspace/alberto-sandbox/home/.mimo/model_config.json`), define a raiz do sandbox antes de iniciar o Alberto:
 
 ```bash
-export ALBERTO_SANDBOX_DIR="$HOME/alberto-sandbox"
+export ALBERTO_SANDBOX_DIR="/workspace/alberto-sandbox"
 ```
 
-Nesse caso, a configuração fica em `$ALBERTO_SANDBOX_DIR/home/.mimo/model_config.json`.
+Também podes escolher outra raiz, por exemplo `$HOME/alberto-sandbox`. A configuração fica sempre em `$ALBERTO_SANDBOX_DIR/home/.mimo/model_config.json`.
 
 ## 5. Configurar NVIDIA e fallback
 
