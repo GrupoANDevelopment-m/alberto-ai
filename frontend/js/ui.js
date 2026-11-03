@@ -212,13 +212,14 @@ class AlbertoApp {
         } else if (chunk.type === 'error') {
           responseText = `[erro: ${chunk.error}]`;
         }
-      });
+      }, this.conversationId);
+      if (finalConvId) this.conversationId = finalConvId;
     } catch (e) {
-      responseText = `[backend offline] ${e.message}\n\nVocê precisa rodar:\n  alberto serve --port 8741\n\nResposta local (preview):\n${this.mockResponse(text, strategy)}`;
+      responseText = `[FALHA REAL DO BACKEND] ${e.message}\n\nNenhuma resposta simulada foi gerada. Verifica o servidor e os logs.`;
     }
 
     typing.remove();
-    const finalText = responseText || this.mockResponse(text, finalStrategy);
+    const finalText = responseText || '[SEM RESPOSTA] O backend terminou sem devolver conteúdo.';
     this.appendMessage('assistant', finalText, finalStrategy);
 
     if (finalToolCalls && finalToolCalls.length) {
