@@ -51,7 +51,7 @@ class Orchestrator:
             r"\b("
             r"program(?:a|ar|e)|codific(?:a|ar|e)|implement(?:a|ar|e)|"
             r"corrig(?:e|ir|a)|consert(?:a|ar|e)|depur(?:a|ar|e)|debug(?:ue|ar)?|"
-            r"refator(?:a|ar|e)|edit(?:e|ar)\\s+(?:o\\s+)?c[oó]digo|"
+            r"refator(?:a|ar|e)|edit(?:e|ar)\s+(?:o\\s+)?c[oó]digo|"
             r"crie?\s+(?:uma?\s+)?(?:fun[cç][aã]o|classe|m[oó]dulo|script)|"
             r"write\s+code|implement|debug|refactor|fix\s+(?:the\s+)?code|"
             r"modify\s+(?:the\s+)?code|run\s+tests?|"
