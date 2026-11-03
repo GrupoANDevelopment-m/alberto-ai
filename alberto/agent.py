@@ -124,7 +124,8 @@ class Alberto:
         }
 
     # ===== Chat (natural conversation) =====
-    def chat(self, prompt: str, *, conversation_id: Optional[str] = None) -> Dict:
+    def chat(self, prompt: str, *, conversation_id: Optional[str] = None,
+             new_conversation: bool = False) -> Dict:
         """Natural conversation. Returns dict with response + strategy + tool calls.
 
         Args:
@@ -138,8 +139,9 @@ class Alberto:
         conv = None
         if conversation_id:
             conv = self.conversations.get(conversation_id)
-        if conv is None:
-            # Continue most recent active conversation if <10 min old
+        if conv is None and not new_conversation:
+            # CLI callers may continue the latest recent conversation. The web UI
+            # sends new_conversation=True after an explicit chat reset.
             conv = self.conversations.latest_active(max_age_seconds=600)
         if conv is None:
             conv = self.conversations.create()
