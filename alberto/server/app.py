@@ -146,8 +146,22 @@ def create_app(alberto: Optional[Alberto] = None,
 
         async def gen():
             try:
-                result = a.chat(req.prompt, conversation_id=req.conversation_id)
-                text = result.get("response", "")
+                result = await asyncio.to_thread(
+                    a.chat, req.prompt, conversation_id=req.conversation_id
+                )
+                text = (result.get("response") or "").strip()
+                if not text:
+                    yield "data: " + json.dumps({
+                        "type": "error",
+                        "error": "Alberto.chat terminou sem conteúdo de resposta.",
+                    }) + "\n\n"
+                    return
+                if text.startswith("[sem modelo configurado") or text.startswith("[ERRO REAL"):
+                    yield "data: " + json.dumps({
+                        "type": "error",
+                        "error": text,
+                    }) + "\n\n"
+                    return
                 for chunk in chunk_text(text, size=20):
                     yield "data: " + json.dumps({"type": "text", "content": chunk}) + "\n\n"
                     await asyncio.sleep(0)
