@@ -2,8 +2,9 @@ name: CI
 
 # Alberto AI v1.8 CI pipeline (closes G-O1)
 on:
+  workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, fix/chat-default-task-routing]
   pull_request:
     branches: [main, master]
 
