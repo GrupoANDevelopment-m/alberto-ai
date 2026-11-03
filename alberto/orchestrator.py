@@ -19,7 +19,7 @@ class Strategy:
 class Orchestrator:
     """Picks a strategy based on task content + squad state."""
 
-    def __init__(self, *, default_task: str = "code"):
+    def __init__(self, *, default_task: str = "chat"):
         self.default_task = default_task
 
     def decide(self, text: str, *, active_squad: Optional[str] = None,
@@ -43,6 +43,27 @@ class Orchestrator:
                 engine="both",
                 squad=active_squad,
                 task_routing=self.default_task,
+            )
+
+        # Explicit software-engineering requests use the code task. Ordinary
+        # conversation remains on the chat task; never infer "code" by default.
+        if re.search(
+            r"\\b("
+            r"programa[r]?|codifica[r]?|implemente?|implementar|"
+            r"corrija[r]?|corrigir|conserte?|depura[r]?|debug(?:ue|ar)?|"
+            r"refatore?|refatorar|edite?\\s+(?:o\\s+)?c[oó]digo|"
+            r"crie?\\s+(?:uma?\\s+)?(?:fun[cç][aã]o|classe|m[oó]dulo|script)|"
+            r"write\\s+code|implement|debug|refactor|fix\\s+(?:the\\s+)?code|"
+            r"modify\\s+(?:the\\s+)?code|run\\s+tests?|"
+            r"execut(?:e|ar)\\s+(?:os?\\s+)?testes?"
+            r")\\b",
+            t,
+        ):
+            return Strategy(
+                mode="solo",
+                reason="explicit software-engineering request",
+                engine="mimo",
+                task_routing="code",
             )
 
         # Speculative: "best", "compare", "tradeoff"
