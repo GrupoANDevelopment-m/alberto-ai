@@ -72,7 +72,8 @@ export class AlbertoAPI {
     });
   }
 
-  // Chat (with streaming via SSE)
+  // Chat (with streaming via SSE). Reject non-SSE responses so HTML/mock pages
+  // cannot be mistaken for a successful model response.
   async chat(prompt, onChunk, conversationId) {
     const body = { prompt };
     if (conversationId) body.conversation_id = conversationId;
@@ -81,23 +82,37 @@ export class AlbertoAPI {
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       body: JSON.stringify(body),
     });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const detail = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${detail.slice(0, 300)}`);
+    }
+    if (!resp.body || !resp.headers.get('content-type')?.includes('text/event-stream')) {
+      throw new Error('Resposta inválida: o endpoint /api/chat não devolveu SSE.');
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    const consume = (line) => {
+      if (!line.startsWith('data: ')) return;
+      const payload = line.slice(6);
+      try {
+        const event = JSON.parse(payload);
+        onChunk?.(event);
+        if (event.type === 'error') throw new Error(event.error || 'Erro no endpoint /api/chat');
+      } catch (error) {
+        if (error instanceof SyntaxError) onChunk?.({ type: 'text', content: payload });
+        else throw error;
+      }
+    };
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      buf += decoder.decode(value || new Uint8Array(), { stream: !done });
       const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const payload = line.slice(6);
-          try { onChunk?.(JSON.parse(payload)); } catch { onChunk?.({ type: 'text', content: payload }); }
-        }
-      }
+      buf = lines.pop() || '';
+      for (const line of lines) consume(line.replace(/\r$/, ''));
+      if (done) break;
     }
+    if (buf.trim()) consume(buf.replace(/\r$/, ''));
   }
 
 
