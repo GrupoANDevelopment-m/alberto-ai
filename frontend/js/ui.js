@@ -15,6 +15,7 @@ class AlbertoApp {
     this.shortcuts = {};
     this.squads = [];
     this.memory = [];
+    this.conversationId = null;
     this.bindEvents();
     this.init();
   }
