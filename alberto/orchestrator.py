@@ -80,7 +80,7 @@ class Orchestrator:
             return Strategy(
                 mode="speculative",
                 reason="user invoked max-mode",
-                engine="mimo",
+                engine="model_router",
                 task_routing="reasoning",
             )
 
