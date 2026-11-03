@@ -15,6 +15,8 @@ class AlbertoApp {
     this.shortcuts = {};
     this.squads = [];
     this.memory = [];
+    this.conversationId = null;
+    this.newConversation = true;
     this.bindEvents();
     this.init();
   }
@@ -88,27 +90,15 @@ class AlbertoApp {
     } catch (e) {
       $('#status-dot').classList.add('error');
       $('#status-text').textContent = 'offline (mock)';
-      this.toast('Backend offline — usando dados mock pra preview', 'info');
-      this.applyStatus(this.mockStatus());
+      this.toast('Backend offline — chat e estado indisponíveis até o servidor iniciar.', 'error');
     }
-  }
-
-  mockStatus() {
-    return {
-      name: 'Alberto AI',
-      version: '1.0.0',
-      sandbox: 'LocalSandbox',
-      mimo: { running: true, memory_keys: 0 },
-      hermes: { running: false },
-      shortcuts: 0,
-      squads: ['engineering', 'research', 'product', 'incident', 'data-ml', 'growth', 'finance', 'support'],
-      active_squad: null,
-      models: [],
-    };
   }
 
   applyStatus(status) {
     if (!status) return;
+    if ((status.models || []).includes("chat")) {
+      $('#engine-grid [data-engine="alberto"]').classList.add('active');
+    }
     if (status.mimo?.running) {
       $('#engine-grid [data-engine="mimo"]').classList.add('active');
     }
@@ -180,7 +170,7 @@ class AlbertoApp {
     this.autoresizeComposer();
 
     // Strategy decision
-    let strategy = { mode: 'solo', engine: 'mimo', task_routing: 'code' };
+    let strategy = { mode: 'solo', engine: 'model_router', task_routing: 'chat' };
     try {
       strategy = await this.api.strategy(text);
     } catch {}
@@ -208,13 +198,15 @@ class AlbertoApp {
         } else if (chunk.type === 'error') {
           responseText = `[erro: ${chunk.error}]`;
         }
-      });
+      }, this.conversationId, this.newConversation);
+      if (finalConvId) this.conversationId = finalConvId;
+      this.newConversation = false;
     } catch (e) {
-      responseText = `[backend offline] ${e.message}\n\nVocê precisa rodar:\n  alberto serve --port 8741\n\nResposta local (preview):\n${this.mockResponse(text, strategy)}`;
+      responseText = `[FALHA REAL DO BACKEND] ${e.message}\n\nNenhuma resposta simulada foi gerada. Verifica o servidor e os logs.`;
     }
 
     typing.remove();
-    const finalText = responseText || this.mockResponse(text, finalStrategy);
+    const finalText = responseText || '[SEM RESPOSTA] O backend terminou sem devolver conteúdo.';
     this.appendMessage('assistant', finalText, finalStrategy);
 
     if (finalToolCalls && finalToolCalls.length) {
@@ -227,30 +219,6 @@ class AlbertoApp {
     if (text.toLowerCase().includes('memory')) {
       this.loadMemory();
     }
-  }
-
-  mockResponse(text, strategy) {
-    if (text.startsWith('/aiox-squad activate')) {
-      const name = text.split(' ').pop();
-      this.activeSquad = name;
-      this.updateSquadPanel();
-      return `Squad **${name}** ativado. Próximos comandos serão roteados por ele.`;
-    }
-    if (text.startsWith('/hermes browser')) {
-      return `🌐 Buscando ${text.split(' ').slice(2).join(' ')}... (em produção, abriria Hermes browser)`;
-    }
-    if (text.startsWith('/s ')) {
-      const parts = text.split(' ');
-      const key = parts[1];
-      const expansion = parts.slice(2).join(' ');
-      this.shortcuts[key] = { expansion, use_count: 0 };
-      this.renderShortcuts();
-      return `Atalho **${key}** → \`${expansion}\``;
-    }
-    if (text.startsWith('/strategy')) {
-      return JSON.stringify(strategy, null, 2);
-    }
-    return `Recebi: "${text}"\n\nEstratégia: ${strategy.mode} | engine=${strategy.engine} | task=${strategy.task_routing}\n\n(Em produção, isto viria do LLM via streaming.)`;
   }
 
   appendMessage(role, content, strategy = null) {
@@ -337,6 +305,8 @@ class AlbertoApp {
   }
 
   clearChat() {
+    this.conversationId = null;
+    this.newConversation = true;
     $('#chat-scroll').innerHTML = '';
     $('#chat-empty').style.display = 'flex';
     this.loadMemory();

@@ -1,35 +1,51 @@
-# 🤖 Alberto AI v1.8.1
+# 🤖 Alberto AI v1.8.4
 
-**Integrated AI agent stack** combining 4 open-source projects additively:
+**Alberto AI** is the central chat and orchestration layer. It integrates distinct runtimes and keeps their responsibilities separate:
 
-- 🛡️ **[NVIDIA NemoClaw](https://github.com/nvidia/nemoclaw)** — sandbox + security + 36 secret patterns
-- ⚡ **[Xiaomi MiMoCode](https://github.com/Xiaomi/mimo)** — FTS5 memory + 22 tools
-- 🧠 **[Nous Research Hermes](https://github.com/NousResearch/hermes-agent)** — browser + execution
-- 🔮 **[SynkraAI AIOX](https://github.com/synkraai/aiox)** — workflows + 37 agents
+- 🛡️ **[NVIDIA NemoClaw](https://github.com/nvidia/nemoclaw)** — sandbox and security controls
+- ⚡ **[Xiaomi MiMoCode](https://github.com/Xiaomi/mimo)** — memory and application-generation capabilities
+- 🧠 **[Nous Research Hermes](https://github.com/NousResearch/hermes-agent)** — tools, browser, execution and MCP
+- 🤝 **CrewAI** — squad/team execution; it does not orchestrate Hermes and MiMo
+- 🔀 **ModelRouter** — model/provider selection and fallback for Alberto Chat
+
+Legacy AIOX workflow assets are kept as catalog material; they are not the central coordinator.
 
 ---
 
-## ⚡ Quick Start (5 minutes)
+## ⚡ Quick Start — instalação local segura
+
+Consulta primeiro o [guia completo de instalação local](INSTALL-LOCAL.md). O método recomendado usa Python 3.11+ e ambiente virtual; não instala dependências globalmente.
 
 ```bash
-# 1. Install
 git clone https://github.com/GrupoANDevelopment-m/alberto-ai.git
 cd alberto-ai
-pip install -e .
-
-# 2. Configure LLM (any OpenAI-compat)
-export NVIDIA_API_KEY=nvapi-...
-alberto model set chat nvidia google/diffusiongemma-26b-a4b-it https://integrate.api.nvidia.com/v1
-
-# 3. Talk to Alberto
-alberto chat "Ola Alberto!"
-alberto vision "Descreva isto" https://...
-alberto auto-invoke "Pesquise no reddit"
-
-# 4. Start 3D web UI
-alberto-serve --port 8741
-# Open http://localhost:8741
+bash install_deps.sh
+source .venv/bin/activate
+python scripts/alberto_doctor.py
 ```
+
+Configura o ModelRouter para NVIDIA (o script não guarda os valores das chaves):
+
+```bash
+export NVIDIA_API_KEY="A_TUA_CHAVE_PRINCIPAL"
+export NVIDIA_API_KEY_FALLBACK="A_TUA_CHAVE_FALLBACK"
+python scripts/configure_nvidia.py
+alberto model list
+alberto-serve --host 127.0.0.1 --port 8741
+```
+
+Abre `http://127.0.0.1:8741`. Para manter o sandbox numa localização diferente, define `ALBERTO_SANDBOX_DIR` antes de iniciar o servidor.
+
+## 🧭 Arquitetura operacional pretendida
+
+- **Alberto AI** — camada central de interpretação, orquestração e resposta no chat.
+- **ModelRouter** — encaminha conversa, raciocínio e código para o provider/modelo configurado, com fallback.
+- **MiMo** — memória e geração de aplicações; não substitui o motor LLM do chat principal.
+- **Hermes** — ferramentas, browser, execução e integração MCP.
+- **CrewAI** — execução de squads/equipas de agentes; não coordena Hermes e MiMo.
+- **NemoClaw** — isolamento e controlos de segurança.
+
+Fluxo do chat: frontend → `POST /api/chat` → `Alberto.chat()` → Orchestrator → ModelRouter → provider → resposta SSE. O frontend reutiliza o identificador da conversa e não apresenta respostas mock quando o backend falha.
 
 ## 🏗️ Architecture
 
@@ -43,12 +59,12 @@ alberto-serve --port 8741
 │ │ ├─ Function Caller (32 tools)                   │   │
 │ │ ├─ Security Whitelist (3-tier)                  │   │
 │ │ ├─ Audit Log (~/.alberto/audit.log)             │   │
-│ │ └─ Skill Engine (779 skills, 10 auto-invoke)    │   │
+│ │ └─ Skill Engine (catalogs in skills/ + upstream/hermes/skills)    │   │
 │ └──────────────────────────────────────────────────┘   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│  │ NemoClaw │ │ MiMo     │ │ Hermes   │ │ AIoX     │  │
+│  │ NemoClaw │ │ MiMo     │ │ Hermes   │ │ CrewAI   │  │
 │  │ Security │ │ Memory+  │ │ Browser+ │ │ Workflows│  │
-│  │ (36+patt)│ │ 22 tools │ │ 38 tools │ │ 15 yamls │  │
+│  │ Security │ │ Memory + │ │ Browser +│ │ Squad    │  │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
 │         37 personas · 15 workflows · 80 steps         │
 └─────────────────────────────────────────────────────────┘
@@ -56,7 +72,7 @@ alberto-serve --port 8741
 
 ## 📋 What's Inside (v1.8.1)
 
-### 15 Workflows · 80 Steps · 37 Personas · 0 Gaps
+### Workflow catalog · 80 documented steps · 37 personas
 
 | Domain | Workflow | Steps | Personas |
 |---|---|---|---|
@@ -154,10 +170,10 @@ alberto-ai/
 │   └── security_whitelist.py      # 3-tier whitelisting
 ├── bin/                           # alberto, alberto-serve (with watchdog)
 ├── upstream/                      # Real Hermes + MiMo + AIoX + NemoClaw
-├── skills/                        # 779 skills in 38 categories
+├── skills/                        # 775 SKILL.md files in this repository snapshot
 ├── personas/                      # 37 persona markdown files
 ├── workflows/                     # 15 squad YAML definitions
-├── tests/                         # 8 test files, 324+ tests
+├── tests/                         # regression and component tests
 ├── docs/                          # V1.1 → V1.8 + SECURITY-AUDIT + GAPS-MAP
 ├── Dockerfile                     # v1.8: containerized deployment
 └── .github/workflows/             # v1.8: CI/CD pipeline
@@ -291,3 +307,8 @@ Apache 2.0
 ## Credits
 
 Built by [@GrupoANDevelopment-m](https://github.com/GrupoANDevelopment-m) using Mavis AI agent.
+
+
+## Local installation and readiness
+
+See [INSTALL-LOCAL.md](INSTALL-LOCAL.md) for the supported installation path, NVIDIA configuration, persistent sandbox location, and the read-only diagnostic that counts the local and Hermes skill catalogs. The repository snapshot currently contains 775 local skill definitions plus 72 Hermes upstream skill definitions; the runtime diagnostic reports the actually discoverable count on the installed machine.

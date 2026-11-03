@@ -41,7 +41,7 @@ class TestCLIAllSubcommands:
 
         proc = subprocess.run(
             [sys.executable, "-m", "alberto.cli", subcommand] + args,
-            cwd="/workspace/alberto-ai",
+            cwd=Path(__file__).resolve().parent.parent,
             capture_output=True,
             timeout=10,
             env=env,
@@ -55,7 +55,7 @@ class TestCLIAllSubcommands:
         """`alberto --help` should print available subcommands."""
         proc = subprocess.run(
             [sys.executable, "-m", "alberto.cli", "--help"],
-            cwd="/workspace/alberto-ai",
+            cwd=Path(__file__).resolve().parent.parent,
             capture_output=True,
             timeout=10,
         )

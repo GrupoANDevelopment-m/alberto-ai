@@ -40,7 +40,8 @@ class LocalSandbox:
     def __init__(self, *, base_dir: Optional[Path] = None, allow_net: bool = True):
         if base_dir is None:
             # Persistent sandbox: keep memory/conversations across runs
-            base_dir = Path(os.environ.get("ALBERTO_SANDBOX_DIR", "/tmp/alberto-sandbox"))
+            default_dir = Path.home() / ".local" / "share" / "alberto-ai" / "sandbox"
+            base_dir = Path(os.environ.get("ALBERTO_SANDBOX_DIR", str(default_dir))).expanduser()
         self._base = Path(base_dir)
         self._home = self._base / "home"
         self._home.mkdir(parents=True, exist_ok=True)
