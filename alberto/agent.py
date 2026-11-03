@@ -301,8 +301,12 @@ class Alberto:
                 squad_text = self._format_squad_result(squad_result)
                 response_text = squad_text
             elif strat.mode == "speculative":
-                mm = self.mimo.max_mode(prompt)
-                response_text = self._format_max_mode(mm)
+                # User-facing chat (including comparison/reasoning prompts) must
+                # use Alberto ModelRouter, not MiMo max_mode. MiMo remains the
+                # memory/app-generation engine and is not the primary chat LLM.
+                resp = self.router.invoke("reasoning", messages,
+                                          max_tokens=4096, temperature=0.3)
+                response_text = self.router.extract_text(resp)
             else:
                 # Solo: call router with native function calling
                 from .runtime.function_caller import run_tool_loop
