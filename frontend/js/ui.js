@@ -16,6 +16,7 @@ class AlbertoApp {
     this.squads = [];
     this.memory = [];
     this.conversationId = null;
+    this.newConversation = true;
     this.bindEvents();
     this.init();
   }
@@ -197,8 +198,9 @@ class AlbertoApp {
         } else if (chunk.type === 'error') {
           responseText = `[erro: ${chunk.error}]`;
         }
-      }, this.conversationId);
+      }, this.conversationId, this.newConversation);
       if (finalConvId) this.conversationId = finalConvId;
+      this.newConversation = false;
     } catch (e) {
       responseText = `[FALHA REAL DO BACKEND] ${e.message}\n\nNenhuma resposta simulada foi gerada. Verifica o servidor e os logs.`;
     }
@@ -304,6 +306,7 @@ class AlbertoApp {
 
   clearChat() {
     this.conversationId = null;
+    this.newConversation = true;
     $('#chat-scroll').innerHTML = '';
     $('#chat-empty').style.display = 'flex';
     this.loadMemory();
