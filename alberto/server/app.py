@@ -43,6 +43,7 @@ class ChatRequest(BaseModel):
     prompt: str
     squad: Optional[str] = None
     conversation_id: Optional[str] = None
+    new_conversation: bool = False
 
 class MemorySetRequest(BaseModel):
     key: str
@@ -147,7 +148,8 @@ def create_app(alberto: Optional[Alberto] = None,
         async def gen():
             try:
                 result = await asyncio.to_thread(
-                    a.chat, req.prompt, conversation_id=req.conversation_id
+                    a.chat, req.prompt, conversation_id=req.conversation_id,
+                    new_conversation=req.new_conversation
                 )
                 text = (result.get("response") or "").strip()
                 if not text:
