@@ -1,11 +1,14 @@
-# 🤖 Alberto AI v1.8.1
+# 🤖 Alberto AI v1.8.4
 
-**Integrated AI agent stack** combining 4 open-source projects additively:
+**Alberto AI** is the central chat and orchestration layer. It integrates distinct runtimes and keeps their responsibilities separate:
 
-- 🛡️ **[NVIDIA NemoClaw](https://github.com/nvidia/nemoclaw)** — sandbox + security + 36 secret patterns
-- ⚡ **[Xiaomi MiMoCode](https://github.com/Xiaomi/mimo)** — FTS5 memory + 22 tools
-- 🧠 **[Nous Research Hermes](https://github.com/NousResearch/hermes-agent)** — browser + execution
-- 🔮 **[SynkraAI AIOX](https://github.com/synkraai/aiox)** — workflows + 37 agents
+- 🛡️ **[NVIDIA NemoClaw](https://github.com/nvidia/nemoclaw)** — sandbox and security controls
+- ⚡ **[Xiaomi MiMoCode](https://github.com/Xiaomi/mimo)** — memory and application-generation capabilities
+- 🧠 **[Nous Research Hermes](https://github.com/NousResearch/hermes-agent)** — tools, browser, execution and MCP
+- 🤝 **CrewAI** — squad/team execution; it does not orchestrate Hermes and MiMo
+- 🔀 **ModelRouter** — model/provider selection and fallback for Alberto Chat
+
+Legacy AIOX workflow assets are kept as catalog material; they are not the central coordinator.
 
 ---
 
@@ -59,9 +62,9 @@ Fluxo do chat: frontend → `POST /api/chat` → `Alberto.chat()` → Orchestrat
 │ │ └─ Skill Engine (catalogs in skills/ + upstream/hermes/skills)    │   │
 │ └──────────────────────────────────────────────────┘   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│  │ NemoClaw │ │ MiMo     │ │ Hermes   │ │ AIoX     │  │
+│  │ NemoClaw │ │ MiMo     │ │ Hermes   │ │ CrewAI   │  │
 │  │ Security │ │ Memory+  │ │ Browser+ │ │ Workflows│  │
-│  │ (36+patt)│ │ 22 tools │ │ 38 tools │ │ 15 yamls │  │
+│  │ Security │ │ Memory + │ │ Browser +│ │ Squad    │  │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
 │         37 personas · 15 workflows · 80 steps         │
 └─────────────────────────────────────────────────────────┘
@@ -69,7 +72,7 @@ Fluxo do chat: frontend → `POST /api/chat` → `Alberto.chat()` → Orchestrat
 
 ## 📋 What's Inside (v1.8.1)
 
-### 15 Workflows · 80 Steps · 37 Personas · 0 Gaps
+### Workflow catalog · 80 documented steps · 37 personas
 
 | Domain | Workflow | Steps | Personas |
 |---|---|---|---|
