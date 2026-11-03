@@ -74,8 +74,8 @@ export class AlbertoAPI {
 
   // Chat (with streaming via SSE). Reject non-SSE responses so HTML/mock pages
   // cannot be mistaken for a successful model response.
-  async chat(prompt, onChunk, conversationId) {
-    const body = { prompt };
+  async chat(prompt, onChunk, conversationId, newConversation = false) {
+    const body = { prompt, new_conversation: Boolean(newConversation) };
     if (conversationId) body.conversation_id = conversationId;
     const resp = await fetch(this.baseUrl + '/api/chat', {
       method: 'POST',
