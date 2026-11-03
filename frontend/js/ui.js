@@ -342,6 +342,7 @@ class AlbertoApp {
   }
 
   clearChat() {
+    this.conversationId = null;
     $('#chat-scroll').innerHTML = '';
     $('#chat-empty').style.display = 'flex';
     this.loadMemory();
