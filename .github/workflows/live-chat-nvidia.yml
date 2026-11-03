@@ -50,6 +50,9 @@ jobs:
           try:
               agent = Alberto()
               configured = setup_fallback_chain(agent)
+              # This is a conversational chat test, not a code/function-calling test.
+              # Route through the plain chat path so tool-loop behavior cannot mask inference.
+              agent.orchestrator.default_task = "chat"
               if not configured:
                   raise RuntimeError("Could not configure the repository's NVIDIA model chain.")
 
