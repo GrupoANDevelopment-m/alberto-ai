@@ -1,0 +1,99 @@
+name: Alberto AI — Live Chat Inference
+
+on:
+  push:
+    branches:
+      - test/alberto-live-chat-nvidia
+
+permissions:
+  contents: read
+
+jobs:
+  live-chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Execute real Alberto chat against NVIDIA
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from alberto.agent import Alberto
+          from alberto.runtime.integration import setup_fallback_chain
+
+          if not os.environ.get("NVIDIA_API_KEY"):
+              print(json.dumps({
+                  "status": "BLOCKED",
+                  "reason": "GitHub Actions secret NVIDIA_API_KEY is not configured or unavailable to this workflow."
+              }))
+              sys.exit(2)
+
+          agent = None
+          try:
+              agent = Alberto()
+              configured = setup_fallback_chain(agent)
+              if not configured:
+                  raise RuntimeError("Could not configure the repository's NVIDIA model chain.")
+
+              prompt = (
+                  "Responde em português. Identifica-te como Alberto AI e descreve, "
+                  "com rigor e sem inventar capacidades, o teu papel nesta arquitetura. "
+                  "Explica como o teu runtime utiliza o ModelRouter e como estão ligados "
+                  "Hermes e MiMo. Distingue claramente componentes efetivamente ativos "
+                  "de integrações que ainda sejam apenas parciais ou indisponíveis. "
+                  "Termina com uma frase curta a confirmar que esta resposta foi gerada "
+                  "por uma chamada real ao modelo."
+              )
+              result = agent.chat(prompt)
+              response = result.get("response", "") if isinstance(result, dict) else str(result)
+              if not response or response.startswith("[sem modelo configurado") or response.startswith("[no content]"):
+                  print(json.dumps({
+                      "status": "FAIL",
+                      "reason": "Alberto chat returned no usable model response.",
+                      "strategy": result.get("strategy") if isinstance(result, dict) else None,
+                      "response": response[:1500]
+                  }, ensure_ascii=False))
+                  sys.exit(1)
+
+              print(json.dumps({
+                  "status": "PASS",
+                  "test": "real_alberto_chat",
+                  "provider_endpoint": "NVIDIA NIM OpenAI-compatible API",
+                  "strategy": result.get("strategy") if isinstance(result, dict) else None,
+                  "conversation_id": result.get("conversation_id") if isinstance(result, dict) else None,
+                  "tool_calls": len(result.get("tool_calls", [])) if isinstance(result, dict) else 0,
+                  "response": response[:5000]
+              }, ensure_ascii=False))
+          except Exception as exc:
+              # Never print environment values or request headers.
+              print(json.dumps({
+                  "status": "FAIL",
+                  "error_type": type(exc).__name__,
+                  "error": str(exc)[:1200]
+              }, ensure_ascii=False))
+              sys.exit(1)
+          finally:
+              if agent is not None:
+                  try:
+                      agent.shutdown()
+                  except Exception:
+                      pass
+          PY
