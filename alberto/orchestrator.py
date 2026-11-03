@@ -71,7 +71,7 @@ class Orchestrator:
             return Strategy(
                 mode="speculative",
                 reason="task asks for comparison/best-of",
-                engine="mimo",
+                engine="model_router",
                 task_routing="reasoning",
             )
 
