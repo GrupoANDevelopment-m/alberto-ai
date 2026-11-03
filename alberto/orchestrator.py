@@ -88,6 +88,6 @@ class Orchestrator:
         return Strategy(
             mode="solo",
             reason="default single-engine",
-            engine="mimo",
+            engine="model_router",
             task_routing=self.default_task,
         )
