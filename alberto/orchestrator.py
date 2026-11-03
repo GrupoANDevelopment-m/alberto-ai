@@ -11,7 +11,7 @@ from typing import List, Optional
 class Strategy:
     mode: str            # "solo" | "speculative" | "squad"
     reason: str
-    engine: str          # "mimo" | "hermes" | "both"
+    engine: str          # "model_router" | "hermes" | "both"
     squad: Optional[str] = None
     task_routing: str = "chat"
 
@@ -62,7 +62,7 @@ class Orchestrator:
             return Strategy(
                 mode="solo",
                 reason="explicit software-engineering request",
-                engine="mimo",
+                engine="model_router",
                 task_routing="code",
             )
 
