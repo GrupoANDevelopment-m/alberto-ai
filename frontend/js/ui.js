@@ -109,6 +109,9 @@ class AlbertoApp {
 
   applyStatus(status) {
     if (!status) return;
+    if ((status.models || []).includes("chat")) {
+      $('#engine-grid [data-engine="alberto"]').classList.add('active');
+    }
     if (status.mimo?.running) {
       $('#engine-grid [data-engine="mimo"]').classList.add('active');
     }
@@ -180,7 +183,7 @@ class AlbertoApp {
     this.autoresizeComposer();
 
     // Strategy decision
-    let strategy = { mode: 'solo', engine: 'mimo', task_routing: 'code' };
+    let strategy = { mode: 'solo', engine: 'model_router', task_routing: 'chat' };
     try {
       strategy = await this.api.strategy(text);
     } catch {}
