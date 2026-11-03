@@ -13,6 +13,10 @@ def test_explicit_software_work_routes_to_code():
     orchestrator = Orchestrator()
     prompts = [
         "Implementa uma função Python para ordenar uma lista.",
+        "Implementar uma API REST.",
+        "Programa um script para processar ficheiros.",
+        "Refatora este serviço.",
+        "Edita o código para corrigir o erro.",
         "Corrige este bug no código.",
         "Refatora este módulo.",
         "Run tests for this package.",
