@@ -43,7 +43,7 @@ O diagnóstico mostra:
 - diretório de sandbox e localização do `model_config.json`;
 - tarefas de modelo configuradas e presença das variáveis de credencial no processo.
 
-No snapshot do repositório usado para preparar este guia foram encontrados **775 ficheiros `SKILL.md` em `skills/` e 100 em `upstream/hermes/skills/`**. O diagnóstico local é a autoridade para a instalação real; o total descoberto pelo runtime pode ser menor por deduplicação de nomes.
+No snapshot do repositório usado para preparar este guia foram encontrados **775 ficheiros `SKILL.md` em `skills/` e 72 em `upstream/hermes/skills/`**. O diagnóstico local é a autoridade para a instalação real; o total descoberto pelo runtime pode ser menor por deduplicação de nomes.
 
 As skills estão no próprio clone, em `skills/` e `upstream/hermes/skills/`. O Alberto procura esses diretórios relativamente à raiz do repositório; não é necessário copiar as skills para uma pasta global. A instalação editável mantém os caminhos corretos.
 
