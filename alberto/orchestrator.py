@@ -13,7 +13,7 @@ class Strategy:
     reason: str
     engine: str          # "mimo" | "hermes" | "both"
     squad: Optional[str] = None
-    task_routing: str = "code"
+    task_routing: str = "chat"
 
 
 class Orchestrator:
